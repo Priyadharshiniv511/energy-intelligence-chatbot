@@ -146,6 +146,26 @@ def test_network_error_maps_to_unavailable() -> None:
         client.generate(REQUEST)
 
 
+def _httpx2_errors() -> list[object]:
+    httpx2 = pytest.importorskip("httpx2")
+    return [(httpx2.ReadTimeout("slow"), LLMTimeout),
+            (httpx2.ConnectTimeout("slow"), LLMTimeout),
+            (httpx2.ConnectError("dns failure"), LLMUnavailable)]
+
+
+@pytest.mark.parametrize("index", range(3))
+def test_httpx2_errors_are_mapped_and_retried(index: int) -> None:
+    """google-genai sends requests through httpx2 when it is installed; its errors
+    are not httpx subclasses, so they must be mapped explicitly (regression test)."""
+    failure, expected = _httpx2_errors()[index]
+    sdk = FakeSDK(failure, failure, failure)
+    client, sleeps = make_client(sdk, max_attempts=3)
+    with pytest.raises(expected):
+        client.generate(REQUEST)
+    assert len(sdk.calls) == 3  # retried, not given up as an unknown error
+    assert len(sleeps) == 2
+
+
 # ---- Backoff ------------------------------------------------------------------------
 
 def test_backoff_grows_exponentially_with_jitter() -> None:
@@ -319,3 +339,65 @@ def test_fake_llm_client_satisfies_the_interface() -> None:
     with pytest.raises(LLMTimeout):
         fake.generate(REQUEST)
     assert len(fake.requests) == 2
+
+
+# ---- Total time budget per call ----------------------------------------------------------
+
+class _Clock:
+    """Fake monotonic clock; the recording sleep moves it forward."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def __call__(self) -> float:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.now += seconds
+
+
+def _budget_client(sdk: FakeSDK, budget: float) -> tuple[GeminiClient, _Clock]:
+    clock = _Clock()
+    client = GeminiClient(
+        sdk, timeout_seconds=15,
+        retry=RetryPolicy(max_attempts=3, base_delay=1.0, max_delay=8.0),
+        sleep=clock.sleep, rng=lambda: 0.5, call_budget_seconds=budget, clock=clock,
+    )
+    return client, clock
+
+
+def test_attempt_timeout_is_shortened_to_the_remaining_budget() -> None:
+    sdk = FakeSDK(fakes.ok_response())
+    client, _ = _budget_client(sdk, budget=10)
+    client.generate(REQUEST)
+    assert sdk.calls[0]["config"].http_options.timeout == 10_000  # not the full 15 s
+
+
+def test_retries_stop_when_the_budget_cannot_fit_another_attempt() -> None:
+    sdk = FakeSDK(*(fakes.api_error(503) for _ in range(3)))
+    client, clock = _budget_client(sdk, budget=1.5)
+    with pytest.raises(LLMUnavailable):
+        client.generate(REQUEST)
+    assert len(sdk.calls) == 1  # a 0.75 s backoff would leave < 1 s: give up now
+    assert clock.now == 0.0
+
+
+def test_budget_used_up_before_an_attempt_raises_timeout() -> None:
+    sdk = FakeSDK(fakes.ok_response())
+    client, clock = _budget_client(sdk, budget=5)
+
+    class SlowLimiter:
+        def acquire(self, model: str) -> None:
+            clock.now += 4.5  # the limiter wait eats the budget
+
+    client._limiter = SlowLimiter()  # noqa: SLF001 - test-only
+    with pytest.raises(LLMTimeout):
+        client.generate(REQUEST)
+    assert sdk.calls == []
+
+
+def test_from_settings_sets_the_call_budget() -> None:
+    settings = Settings(_env_file=None, gemini_api_key="fake-key", answer_model="a",
+                        classifier_model="b", llm_call_budget_seconds=12)  # type: ignore[call-arg]
+    client = GeminiClient.from_settings(settings)
+    assert client._budget == 12  # noqa: SLF001 - test-only

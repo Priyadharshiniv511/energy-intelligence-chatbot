@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from pydantic import Field, SecretStr, field_validator
+from pydantic import Field, SecretStr, ValidationError, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -31,7 +31,8 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
-    gemini_api_key: SecretStr
+    # min_length: an empty `GEMINI_API_KEY=` should fail at startup, not on the first call.
+    gemini_api_key: SecretStr = Field(min_length=1)
     # Model names are required config, so no model version is hardcoded in the code.
     # WHY the pattern: a typo such as `ANSWER_MODEL==gemini-x` would otherwise only
     # show up as a vague HTTP 400 on the first real call. Failing at startup with the
@@ -50,6 +51,10 @@ class Settings(BaseSettings):
     llm_max_attempts: int = Field(default=3, ge=1, le=10)
     llm_backoff_base_seconds: float = Field(default=1.0, ge=0)
     llm_backoff_max_seconds: float = Field(default=8.0, ge=0)
+    # Total time one LLM call may take, across rate-limit waits, every retry and the
+    # backoff between them. WHY: without it, 3 attempts x 15 s timeout + waits could
+    # keep a user (and an API worker thread) waiting for minutes on one message.
+    llm_call_budget_seconds: float = Field(default=30.0, gt=0, le=600)
 
     # G1 input cap. WHY: long inputs cost quota, hide injections in bulk text, and
     # give regexes more to chew on. 2,000 chars is plenty for an energy question.
@@ -90,3 +95,14 @@ def get_settings() -> Settings:
     Settings(...) directly instead of calling this, so they never need a real .env.
     """
     return Settings()  # type: ignore[call-arg]  # values come from env
+
+
+def describe_config_error(exc: ValidationError) -> str:
+    """One safe line naming the bad settings, e.g. "... in .env: ANSWER_MODEL".
+
+    WHY not print the ValidationError itself: pydantic includes the values it read in
+    its message, and those can hold secrets. Setting names are safe to show.
+    """
+    names = sorted({str(err["loc"][0]).upper() for err in exc.errors() if err.get("loc")})
+    listed = ", ".join(names) if names else "unknown"
+    return f"Configuration error: missing or invalid setting(s) in the environment or .env: {listed}"

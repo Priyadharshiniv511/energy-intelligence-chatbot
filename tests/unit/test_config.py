@@ -85,3 +85,22 @@ def test_env_example_values_are_valid_settings(monkeypatch: pytest.MonkeyPatch) 
         monkeypatch.delenv(name.upper(), raising=False)
     settings = Settings(_env_file=ENV_EXAMPLE)  # type: ignore[call-arg]
     assert settings.gemini_api_key.get_secret_value() == "your-gemini-api-key-here"
+
+
+def test_config_error_names_settings_but_never_shows_values() -> None:
+    from pydantic import ValidationError
+
+    from app.config import describe_config_error
+    with pytest.raises(ValidationError) as info:
+        Settings(_env_file=None, gemini_api_key="AIza-very-secret",  # type: ignore[call-arg]
+                 answer_model="Bad Model secret-value", classifier_model="ok-model")
+    message = describe_config_error(info.value)
+    assert "ANSWER_MODEL" in message
+    assert "secret" not in message.lower()
+
+
+def test_empty_api_key_fails_at_startup() -> None:
+    from pydantic import ValidationError
+    with pytest.raises(ValidationError):
+        Settings(_env_file=None, gemini_api_key="", answer_model="a",  # type: ignore[call-arg]
+                 classifier_model="b")

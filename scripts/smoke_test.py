@@ -24,7 +24,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from pydantic import ValidationError  # noqa: E402
 
-from app.config import Settings  # noqa: E402
+from app.config import Settings, describe_config_error  # noqa: E402
 from app.llm.client import ChatMessage, GeminiClient, LLMRequest  # noqa: E402
 from app.llm.errors import LLMError  # noqa: E402
 
@@ -32,16 +32,11 @@ QUESTION = "What is a kilowatt-hour?"
 
 
 def load_settings() -> Settings | None:
-    """Load settings, reporting only the names of bad fields.
-
-    WHY not print the ValidationError itself: pydantic includes the input values in
-    its message, and those can contain the API key.
-    """
+    """Load settings, reporting only the names of bad fields (never their values)."""
     try:
         return Settings()  # type: ignore[call-arg]
     except ValidationError as exc:
-        fields = ", ".join(".".join(map(str, e["loc"])).upper() for e in exc.errors())
-        print(f"Config error: missing or invalid setting(s) in .env: {fields}")
+        print(describe_config_error(exc))
         return None
 
 

@@ -39,6 +39,11 @@ from app.llm.rate_limiter import RateLimiter
 # this file, DESIGN.md 6.4). Re-exported here so existing imports keep working.
 from app.llm.types import ChatMessage, LLMClient, LLMRequest, LLMResponse, Role
 
+try:  # google-genai >= 2 prefers httpx2 (a fork of httpx) when it is installed
+    import httpx2
+except ImportError:  # pragma: no cover - depends on the installed SDK
+    httpx2 = None  # type: ignore[assignment]
+
 __all__ = [
     "ChatMessage", "GeminiClient", "LLMClient", "LLMRequest", "LLMResponse", "RetryPolicy",
     "Role", "map_exception", "parse_response",
@@ -75,6 +80,10 @@ class RetryPolicy:
         return step / 2 + rng() * step / 2
 
 
+# Shortest attempt worth starting. WHY: an attempt with a few milliseconds left would
+# only time out, spending quota for nothing.
+_MIN_ATTEMPT_MS = 1000
+
 # Finish reasons meaning "the provider blocked the content", not "the model finished".
 _BLOCKED_FINISH_REASONS = frozenset(
     {
@@ -99,6 +108,8 @@ class GeminiClient:
         sleep: Callable[[float], None] = time.sleep,
         rng: Callable[[], float] = random.random,
         rate_limiter: RateLimiter | None = None,
+        call_budget_seconds: float | None = None,
+        clock: Callable[[], float] = time.monotonic,
     ) -> None:
         """Wrap an SDK client.
 
@@ -107,6 +118,8 @@ class GeminiClient:
         instantly), and a fixed `rng` (so delays are predictable).
         `rate_limiter` is None by default, so tests that build a client directly are
         never slowed down. `from_settings` (the real app) always attaches one.
+        `call_budget_seconds` caps the total time of one `generate` call (None = no
+        cap); `clock` is injectable so tests can move time forward.
         """
         self._sdk = sdk_client
         self._timeout_ms = int(timeout_seconds * 1000)  # the SDK takes milliseconds
@@ -114,6 +127,8 @@ class GeminiClient:
         self._sleep = sleep
         self._rng = rng
         self._limiter = rate_limiter
+        self._budget = call_budget_seconds
+        self._clock = clock
 
     @classmethod
     def from_settings(cls, settings: Settings) -> GeminiClient:
@@ -132,11 +147,15 @@ class GeminiClient:
             timeout_seconds=settings.llm_timeout_seconds,
             retry=RetryPolicy.from_settings(settings),
             rate_limiter=RateLimiter.from_settings(settings),
+            call_budget_seconds=settings.llm_call_budget_seconds,
         )
 
     def generate(self, request: LLMRequest) -> LLMResponse:
-        """Call the model, retrying transient failures, and return clean text."""
-        config = self._build_config(request)
+        """Call the model, retrying transient failures, and return clean text.
+
+        The whole call (limiter waits, attempts, backoff) stays within the time budget.
+        """
+        deadline = None if self._budget is None else self._clock() + self._budget
         contents = [
             types.Content(role=m.role, parts=[types.Part(text=m.text)]) for m in request.messages
         ]
@@ -146,18 +165,32 @@ class GeminiClient:
             # here would only wait more, so LLMRateLimited goes straight to the caller.
             if self._limiter is not None:
                 self._limiter.acquire(request.model)
+            config = self._build_config(request, self._attempt_timeout_ms(deadline))
             try:
                 raw = self._sdk.models.generate_content(
                     model=request.model, contents=contents, config=config
                 )
             except Exception as exc:  # noqa: BLE001 - every failure must be mapped
                 error = map_exception(exc)
-                self._wait_or_raise(error, attempt)
+                self._wait_or_raise(error, attempt, deadline)
                 continue
             return parse_response(raw)
         raise AssertionError("unreachable: the loop always returns or raises")
 
-    def _build_config(self, request: LLMRequest) -> types.GenerateContentConfig:
+    def _attempt_timeout_ms(self, deadline: float | None) -> int:
+        """This attempt's timeout: the normal one, shortened to what is left of the budget.
+
+        Raises LLMTimeout if the budget is already used up (e.g. by a limiter wait).
+        """
+        if deadline is None:
+            return self._timeout_ms
+        remaining_ms = int((deadline - self._clock()) * 1000)
+        if remaining_ms < _MIN_ATTEMPT_MS:
+            logger.warning("LLM call budget used up before an attempt")
+            raise LLMTimeout()
+        return min(self._timeout_ms, remaining_ms)
+
+    def _build_config(self, request: LLMRequest, timeout_ms: int) -> types.GenerateContentConfig:
         """Per-call config. The timeout is set on every call, not only on the client."""
         return types.GenerateContentConfig(
             system_instruction=request.system_instruction,
@@ -165,16 +198,20 @@ class GeminiClient:
             max_output_tokens=request.max_output_tokens,
             response_mime_type="application/json" if request.response_schema else None,
             response_json_schema=request.response_schema,
-            http_options=types.HttpOptions(timeout=self._timeout_ms),
+            http_options=types.HttpOptions(timeout=timeout_ms),
         )
 
-    def _wait_or_raise(self, error: LLMError, attempt: int) -> None:
+    def _wait_or_raise(self, error: LLMError, attempt: int, deadline: float | None) -> None:
         """Sleep before the next try, or raise if we should not try again.
 
         `raise ... from None` drops the SDK exception from the traceback, so its raw
         payload cannot surface by accident. We log only the error type and status.
         """
         delay = self._retry_delay(error, attempt)
+        if delay is not None and deadline is not None:
+            # Don't sleep into a retry that would have (almost) no time left to run.
+            if self._clock() + delay + _MIN_ATTEMPT_MS / 1000 > deadline:
+                delay = None
         if delay is None:
             logger.warning(
                 "LLM call failed, giving up: %s status=%s attempt=%d",
@@ -201,11 +238,27 @@ class GeminiClient:
         return self._retry.backoff(attempt, self._rng)
 
 
+def _http_classes(name: str) -> tuple[type[BaseException], ...]:
+    """The exception class `name` from httpx and, if installed, httpx2.
+
+    WHY both: newer google-genai versions send requests through httpx2 when it is
+    installed. httpx2's exceptions are separate classes (not subclasses of httpx's),
+    so checking httpx alone would treat every timeout as an unknown, non-retryable
+    error: no retries and no fallback model.
+    """
+    modules = (httpx, httpx2) if httpx2 is not None else (httpx,)
+    return tuple(getattr(m, name) for m in modules if hasattr(m, name))
+
+
+_TIMEOUT_ERRORS = (*_http_classes("TimeoutException"), TimeoutError)
+_TRANSPORT_ERRORS = _http_classes("TransportError")
+
+
 def map_exception(exc: Exception) -> LLMError:
     """Translate any exception from the SDK or network into our typed errors."""
-    if isinstance(exc, (httpx.TimeoutException, TimeoutError)):
+    if isinstance(exc, _TIMEOUT_ERRORS):
         return LLMTimeout()
-    if isinstance(exc, httpx.TransportError):  # DNS failure, connection reset, ...
+    if isinstance(exc, _TRANSPORT_ERRORS):  # DNS failure, connection reset, ...
         return LLMUnavailable()
     if isinstance(exc, genai_errors.APIError):
         return _map_api_error(exc)

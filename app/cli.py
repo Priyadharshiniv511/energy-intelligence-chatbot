@@ -15,7 +15,7 @@ from typing import Callable
 
 from pydantic import ValidationError
 
-from app.config import get_settings
+from app.config import describe_config_error, get_settings
 from app.conversation.store import SessionNotFoundError
 from app.guardrails import responses
 from app.service import ChatService, build_service
@@ -26,8 +26,6 @@ PROMPT = "you> "
 WELCOME = "Energy assistant. Ask about electricity, renewables, efficiency, grids or bills. /reset, /quit"
 RESET_NOTICE = "Started a new conversation."
 EXPIRED_NOTICE = "Your session expired, so I started a new conversation."
-CONFIG_ERROR = ("Configuration error: set GEMINI_API_KEY, ANSWER_MODEL and CLASSIFIER_MODEL "
-                "in your environment or .env file.")
 
 
 def configure_logging() -> None:
@@ -63,9 +61,9 @@ def main(
     if service is None:
         try:
             service = build_service(get_settings())
-        except ValidationError:
-            # Not the validation details: they can include the values that were read.
-            output_fn(CONFIG_ERROR)
+        except ValidationError as exc:
+            # Setting names only: the full error can include the values that were read.
+            output_fn(describe_config_error(exc))
             return 1
     output_fn(WELCOME)
     session_id = service.create_session()

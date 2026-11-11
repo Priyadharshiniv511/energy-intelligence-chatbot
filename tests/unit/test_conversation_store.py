@@ -8,7 +8,12 @@ import threading
 import pytest
 
 from app.conversation.models import Conversation, Turn
-from app.conversation.store import InMemorySessionStore, SessionNotFoundError, SessionStore
+from app.conversation.store import (
+    InMemorySessionStore,
+    SessionLimitError,
+    SessionNotFoundError,
+    SessionStore,
+)
 
 
 class FakeClock:
@@ -250,3 +255,26 @@ def test_concurrent_strikes_are_all_counted(store: InMemorySessionStore) -> None
 
 def test_snapshot_type(store: InMemorySessionStore) -> None:
     assert isinstance(store.get(store.create()), Conversation)
+
+
+# ---- Capacity --------------------------------------------------------------------------
+
+def test_store_refuses_new_sessions_when_full(clock: FakeClock) -> None:
+    store = InMemorySessionStore(ttl_seconds=60, max_sessions=2, clock=clock)
+    store.create()
+    store.create()
+    with pytest.raises(SessionLimitError):
+        store.create()
+
+
+def test_expired_sessions_free_capacity(clock: FakeClock) -> None:
+    store = InMemorySessionStore(ttl_seconds=60, max_sessions=1, clock=clock)
+    store.create()
+    clock.advance(61)
+    store.create()  # the expired one is purged first, so this fits
+    assert len(store) == 1
+
+
+def test_max_sessions_must_be_positive() -> None:
+    with pytest.raises(ValueError):
+        InMemorySessionStore(max_sessions=0)

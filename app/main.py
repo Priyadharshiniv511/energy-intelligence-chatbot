@@ -16,10 +16,10 @@ from typing import AsyncIterator
 from fastapi import FastAPI, Request, Response, status
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from app.config import get_settings
-from app.conversation.store import SessionNotFoundError
+from app.config import describe_config_error, get_settings
+from app.conversation.store import SessionLimitError, SessionNotFoundError
 from app.http_rate_limit import IpRateLimiter
 from app.service import ChatService, build_service
 
@@ -37,6 +37,8 @@ DEFAULT_RATE_LIMIT_PER_MINUTE = 20
 # ---- Request / response models ---------------------------------------------------------
 
 class MessageIn(BaseModel):
+    """Body of POST /sessions/{id}/messages."""
+
     # WHY extra="forbid": unexpected fields are a sign of a confused or probing client.
     model_config = ConfigDict(extra="forbid")
 
@@ -44,6 +46,8 @@ class MessageIn(BaseModel):
 
 
 class SessionOut(BaseModel):
+    """Body returned by POST /sessions."""
+
     session_id: str
 
 
@@ -56,6 +60,7 @@ class ReplyOut(BaseModel):
 
 
 def _detail(code: int, text: str) -> JSONResponse:
+    """A fixed {"detail": ...} error body, never built from exception or user text."""
     return JSONResponse(status_code=code, content={"detail": text})
 
 
@@ -64,6 +69,7 @@ def _detail(code: int, text: str) -> JSONResponse:
 def create_app(
     service: ChatService | None = None,
     rate_limiter: IpRateLimiter | None = None,
+    session_rate_limiter: IpRateLimiter | None = None,
 ) -> FastAPI:
     """Build the API.
 
@@ -72,17 +78,30 @@ def create_app(
     could each build their own store, splitting sessions between them. WHY not at
     import time: importing this module (in tests, or for tooling) must not need a .env.
     Tests pass their own service, so settings are never read.
+
+    `rate_limiter` limits messages per IP; `session_rate_limiter` limits session
+    creation per IP. WHY two: creating sessions must not use up a client's message
+    budget, but it must be limited, or a loop of POST /sessions could fill memory.
     """
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         if service is None:
-            settings = get_settings()
+            try:
+                settings = get_settings()
+            except ValidationError as exc:
+                # WHY: uvicorn would print pydantic's full error, which includes the
+                # values read from .env. Name the bad settings only, then stop.
+                message = describe_config_error(exc)
+                logger.error(message)
+                raise RuntimeError(message) from None
             app.state.service = build_service(settings)
-            app.state.rate_limiter = rate_limiter or IpRateLimiter(settings.api_rate_limit_per_minute)
+            limit = settings.api_rate_limit_per_minute
         else:
             app.state.service = service
-            app.state.rate_limiter = rate_limiter or IpRateLimiter(DEFAULT_RATE_LIMIT_PER_MINUTE)
+            limit = DEFAULT_RATE_LIMIT_PER_MINUTE
+        app.state.rate_limiter = rate_limiter or IpRateLimiter(limit)
+        app.state.session_rate_limiter = session_rate_limiter or IpRateLimiter(limit)
         yield
 
     app = FastAPI(title="Energy Intelligence Chatbot", lifespan=lifespan)
@@ -96,6 +115,11 @@ def _add_error_handlers(app: FastAPI) -> None:
     async def not_found(_: Request, __: SessionNotFoundError) -> JSONResponse:
         # Same text for unknown, expired and deleted ids (see SessionNotFoundError).
         return _detail(status.HTTP_404_NOT_FOUND, "Session not found.")
+
+    @app.exception_handler(SessionLimitError)
+    async def full(_: Request, __: SessionLimitError) -> JSONResponse:
+        # Capacity, not the client's fault: "try again later", nothing internal.
+        return _detail(status.HTTP_503_SERVICE_UNAVAILABLE, "Service busy, try again later.")
 
     @app.exception_handler(RequestValidationError)
     async def invalid(_: Request, __: RequestValidationError) -> JSONResponse:
@@ -120,25 +144,35 @@ def _add_routes(app: FastAPI) -> None:
         return {"status": "ok"}
 
     @app.post("/sessions", status_code=status.HTTP_201_CREATED, response_model=SessionOut)
-    def create_session(request: Request) -> SessionOut:
+    def create_session(request: Request) -> SessionOut | JSONResponse:
+        """Start a conversation. Rate limited per IP so sessions can't flood memory."""
+        if not request.app.state.session_rate_limiter.allow(_client_ip(request)):
+            return _detail(status.HTTP_429_TOO_MANY_REQUESTS, "Too many requests.")
         return SessionOut(session_id=_service(request).create_session())
 
     @app.post("/sessions/{session_id}/messages", response_model=ReplyOut)
     def send_message(session_id: str, body: MessageIn, request: Request) -> ReplyOut | JSONResponse:
-        limiter: IpRateLimiter = request.app.state.rate_limiter
-        if not limiter.allow(request.client.host if request.client else "unknown"):
+        """Send one message through the guardrail pipeline (via ChatService)."""
+        if not request.app.state.rate_limiter.allow(_client_ip(request)):
             return _detail(status.HTTP_429_TOO_MANY_REQUESTS, "Too many requests.")
         result = _service(request).send(session_id, body.message)
         return ReplyOut(reply=result.reply, blocked=result.blocked, reason_code=result.reason_code)
 
     @app.delete("/sessions/{session_id}", status_code=status.HTTP_204_NO_CONTENT)
     def delete_session(session_id: str, request: Request) -> Response:
+        """Forget a conversation. Unknown ids get the same 404 as everywhere else."""
         _service(request).delete_session(session_id)
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
 
 def _service(request: Request) -> ChatService:
+    """The ChatService built at startup (or injected by a test)."""
     return request.app.state.service
+
+
+def _client_ip(request: Request) -> str:
+    """Socket IP of the caller. Behind a proxy this is the proxy (see Known limitations)."""
+    return request.client.host if request.client else "unknown"
 
 
 app = create_app()

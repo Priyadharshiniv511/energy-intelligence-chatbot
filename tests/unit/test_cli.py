@@ -104,7 +104,9 @@ def test_missing_config_prints_one_fixed_line(monkeypatch: pytest.MonkeyPatch) -
     finally:
         cli.get_settings.cache_clear()
     assert code == 1
-    assert out == [cli.CONFIG_ERROR]
+    assert len(out) == 1
+    assert out[0].startswith("Configuration error")
+    assert "GEMINI_API_KEY" in out[0] and "ANSWER_MODEL" in out[0]
 
 
 def test_cli_logging_keeps_log_lines_off_the_screen(

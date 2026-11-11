@@ -13,7 +13,8 @@ Python 3.11+, FastAPI, google-genai SDK, pydantic, pytest, python-dotenv.
 ## Rules
 - Secrets only from environment variables. Never print, log or hardcode keys.
 - Every user message goes through app/guardrails/pipeline.py. No LLM call bypasses it.
-- Guardrails fail closed: if the classifier errors or is unsure, refuse.
+- Guardrails fail closed: never answer a message the classifier hasn't allowed. If it is unsure or
+  its output is invalid, refuse. If it errors (outage), return the fixed "unavailable" text, no strike.
 - Keep modules separate: llm/, conversation/, domain/, guardrails/.
 - Small functions, type hints, docstrings explaining WHY.
 - I am learning: after each change, summarise what you did and why in plain words.

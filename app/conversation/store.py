@@ -24,6 +24,9 @@ from app.conversation.models import Conversation, Turn
 
 DEFAULT_MAX_TURNS = 10
 DEFAULT_TTL_SECONDS = 30 * 60.0
+# WHY a cap: every live session holds memory for up to the TTL, so without one a client
+# looping on "create session" could exhaust memory and take every other session down.
+DEFAULT_MAX_SESSIONS = 10_000
 
 
 class SessionNotFoundError(KeyError):
@@ -43,11 +46,25 @@ class SessionNotFoundError(KeyError):
         return "Unknown or expired session."
 
 
+class SessionLimitError(RuntimeError):
+    """The store already holds its maximum number of live sessions.
+
+    WHY a separate error: it is a capacity problem, not a bad id, so the API answers
+    503 ("try again later") rather than 404.
+    """
+
+    def __str__(self) -> str:
+        return "Too many active sessions."
+
+
 class SessionStore(Protocol):
     """What the rest of the app may do with sessions. Nothing more."""
 
     def create(self) -> str:
-        """Start an empty session and return its new, unguessable id."""
+        """Start an empty session and return its new, unguessable id.
+
+        Raises SessionLimitError when the store is full.
+        """
         ...
 
     def get(self, session_id: str) -> Conversation:
@@ -112,14 +129,18 @@ class InMemorySessionStore:
         *,
         ttl_seconds: float = DEFAULT_TTL_SECONDS,
         max_turns: int = DEFAULT_MAX_TURNS,
+        max_sessions: int = DEFAULT_MAX_SESSIONS,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
+        if max_sessions < 1:
+            raise ValueError("max_sessions must be at least 1")
         if ttl_seconds <= 0:
             raise ValueError("ttl_seconds must be positive")
         if max_turns < 1:
             raise ValueError("max_turns must be at least 1")
         self._ttl = ttl_seconds
         self._max_turns = max_turns
+        self._max_sessions = max_sessions
         # WHY monotonic: wall-clock time can jump (NTP, DST) and expire everything at
         # once. Tests inject a fake clock to "advance time" instantly.
         self._clock = clock
@@ -131,6 +152,8 @@ class InMemorySessionStore:
     def create(self) -> str:
         self.purge_expired()
         with self._lock:
+            if len(self._sessions) >= self._max_sessions:
+                raise SessionLimitError()
             # WHY secrets, not a counter: the id is the only thing that grants access
             # to a conversation, so it must be unguessable (DESIGN.md 6.3 isolation).
             session_id = secrets.token_urlsafe(16)

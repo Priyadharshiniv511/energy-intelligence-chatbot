@@ -118,6 +118,30 @@ def fold_homoglyphs(text: str) -> tuple[str, bool]:
     return " ".join(words), changed
 
 
+def fold_all_confusables(text: str) -> str:
+    """Fold every Cyrillic/Greek look-alike, in every word, for detection only.
+
+    WHY a separate function from fold_homoglyphs: a word written *entirely* in
+    look-alikes ("ѕуѕтем" = "system") is not mixed-script, so fold_homoglyphs leaves it
+    alone to protect genuine Russian/Greek text. G1 runs only its strong patterns on
+    this folded view, and the normalised text sent to G2/G3 is not changed.
+    """
+    return text.translate(_CONFUSABLES)
+
+
+# Unicode small capitals ("fancy font" generators). They are Latin letters that NFKC
+# does NOT fold, so "ɪɢɴᴏʀᴇ" would slip past every pattern. No language writes ordinary
+# text in them, so folding them in the normalised text is safe.
+_SMALL_CAPITALS = str.maketrans("ᴀʙᴄᴅᴇꜰɢʜɪᴊᴋʟᴍɴᴏᴘǫʀꜱᴛᴜᴠᴡʏᴢ",
+                                "abcdefghijklmnopqrstuvwyz")
+
+
+def fold_small_capitals(text: str) -> tuple[str, bool]:
+    """Replace small-capital letters with plain lowercase. Returns (text, changed)."""
+    folded = text.translate(_SMALL_CAPITALS)
+    return folded, folded != text
+
+
 _WHITESPACE = re.compile(r"\s+")
 
 
@@ -140,17 +164,18 @@ def normalise(raw: str) -> Normalised:
     """Canonical form every later check (and G2/G3) sees.
 
     Order matters: tags are pulled out before NFKC (which leaves them alone anyway),
-    NFKC turns fullwidth/compat letters into plain ones, then invisibles go, then
-    homoglyphs are folded, and finally spaces are collapsed.
+    NFKC turns fullwidth/compat letters into plain ones, invisibles go, spaces are
+    collapsed, then small capitals and mixed-script homoglyphs are folded.
     """
     visible, hidden = extract_tag_text(raw)
     text = unicodedata.normalize("NFKC", visible)
     text, had_invisible = strip_invisible(text)
     text = collapse_spaces(text)
+    text, had_small_caps = fold_small_capitals(text)
     text, had_homoglyphs = fold_homoglyphs(text)
     return Normalised(text=text, hidden_text=hidden,
                       had_invisible=had_invisible or bool(hidden),
-                      had_homoglyphs=had_homoglyphs)
+                      had_homoglyphs=had_homoglyphs or had_small_caps)
 
 
 # ---- Cheap transformations (always applied, no detection possible) --------------------

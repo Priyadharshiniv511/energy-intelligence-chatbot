@@ -1,72 +1,72 @@
 # Energy Intelligence Chatbot: Design
 
-Source brief: `docs/assignment.pdf`. Project rules: `CLAUDE.md`.
+Source brief: `docs/ass.pdf` (kept out of git). Project rules: `CLAUDE.md`.
 
 ## 1. Requirements checklist
 
+`[x]` = done, with the code or test that shows it. `[ ]` = not finished, with what is missing.
+
 ### §1 Objective
-- [ ] 1.1 Chatbot focused **exclusively** on the energy domain
-- [ ] 1.2 Uses Google Gemini free tier (or another free LLM API)
-- [ ] 1.3 Answers on electricity, consumption, generation, renewables, efficiency, **billing**, grids and related topics
-- [ ] 1.4 **Core:** refuses unrelated questions *even under manipulation*
-- [ ] 1.5 Delivered as a CLI or a backend API (no frontend needed)
+- [x] 1.1 Chatbot focused **exclusively** on the energy domain: `domain/scope.py`, G1–G4 in `guardrails/pipeline.py`
+- [x] 1.2 Uses Google Gemini free tier: `llm/client.py`
+- [x] 1.3 Answers on electricity, consumption, generation, renewables, efficiency, **billing**, grids: `scope.py` IN_SCOPE
+- [ ] 1.4 **Core:** refuses unrelated questions *even under manipulation*: built and passing the deterministic and mocked tiers; the live run has covered only `act_as_ai` so far (see §5)
+- [x] 1.5 Delivered as a CLI and a backend API: `main.py`, `cli.py`, `tests/unit/test_api.py`, `test_cli.py`
 
 ### §2 LLM API integration
-- [ ] 2.1 Secure backend integration (the key never reaches the client, logs or responses)
-- [ ] 2.2 API credentials only in environment variables
-- [ ] 2.3 Keeps conversation context "appropriately"
-- [ ] 2.4 Handles API failures, timeouts, rate limits and unavailable/empty responses
-- [ ] 2.5 Error handling **and** retry mechanisms
+- [x] 2.1 Secure backend integration: key is a `SecretStr` (`config.py`), G4 secret checks, config errors name settings only (`describe_config_error`)
+- [x] 2.2 API credentials only in environment variables: `config.py`, `.env` git-ignored
+- [x] 2.3 Keeps conversation context appropriately: `conversation/store.py` (last 10 accepted turns, 30 min TTL)
+- [x] 2.4 Handles failures, timeouts, rate limits, empty responses: `llm/client.py` (`map_exception`, `parse_response`, per-call time budget), `llm/rate_limiter.py`, `tests/unit/test_llm_client.py`
+- [x] 2.5 Error handling **and** retries: backoff with jitter, `retry-after`, optional fallback models (`llm/fallback.py`)
 
 ### §3 Domain coverage
-- [ ] 3.1 Renewables and solar
-- [ ] 3.2 Efficiency and optimisation
-- [ ] 3.3 Generation and distribution
-- [ ] 3.4 Grids and smart meters
-- [ ] 3.5 Industrial/commercial usage and other energy questions
-- [ ] 3.6 Responses are technically appropriate, clear and useful
+- [x] 3.1–3.5 Renewables, efficiency, generation and distribution, grids and smart meters, industrial/commercial: `scope.py`, one `lg_*` case per area
+- [ ] 3.6 Responses are technically appropriate, clear and useful: prompt rules are in place; the live `legitimate` category has not been run yet
 
 ### §4 Guardrails
-- [ ] 4.1 Reject non-energy questions
-- [ ] 4.2 Reject attempts to change identity, role or system instructions
-- [ ] 4.3 Resist **direct and indirect** prompt injection
-- [ ] 4.4 Don't follow "ignore your energy-only restriction" instructions
-- [ ] 4.5 Never reveal the system prompt, internal instructions, API credentials or implementation secrets
-- [ ] 4.6 Reject unrelated questions **disguised** in energy terminology
-- [ ] 4.7 Avoid fabricated specs, statistics or facts
-- [ ] 4.8 Say clearly when it can't answer confidently
-- [ ] 4.9 **Guardrails must not rely only on the system prompt.** Add backend validation and enforcement.
+- [x] 4.1 Reject non-energy questions: G2 + G4 self-report
+- [x] 4.2 Reject identity, role or instruction changes: G1 patterns + G2 intent
+- [x] 4.3 Resist direct and indirect injection: G1 decode + patterns, G2, nonce-tagged quoting in `prompts.py`
+- [x] 4.4 Don't follow "ignore your energy-only restriction": G1 + G2
+- [x] 4.5 Never reveal prompt, instructions, credentials or secrets: canary, prompt-echo and secret checks in G4
+- [x] 4.6 Reject unrelated questions disguised in energy terms: G2 `disguised`
+- [x] 4.7 Avoid fabricated facts (best effort): ACCURACY rules, temperature 0.2
+- [x] 4.8 Say when it can't answer confidently: low-confidence caveat in `output_filter.py`
+- [x] 4.9 Guardrails don't rely only on the system prompt: G1/G4 are code; `tests/unit/test_architecture.py`
 
 ### §5 Adversarial testing (must *demonstrate* resistance)
-- [ ] 5.1 General-knowledge questions
-- [ ] 5.2 "Act as a different AI assistant"
-- [ ] 5.3 "Ignore previous instructions"
-- [ ] 5.4 Unrelated instructions embedded inside energy questions
-- [ ] 5.5 Unrelated questions disguised in energy terms
-- [ ] 5.6 Requests for hidden prompts or configuration
-- [ ] 5.7 Multi-turn gradual drift away from energy
-- [ ] 5.8 Indirect or **encoded** instructions (base64, hex, leetspeak, **translation/non-English** tricks)
-- [ ] 5.9 Enforcement is consistent across conversations
+Every category has cases in `tests/adversarial/cases.py` and passes the deterministic and mocked tiers. The boxes
+stay open until each category has also been run live and recorded in `docs/adversarial_report.md`.
+- [ ] 5.1 General-knowledge questions: live run pending
+- [x] 5.2 "Act as a different AI assistant": live 8/8
+- [ ] 5.3 "Ignore previous instructions": live run pending
+- [ ] 5.4 Unrelated instructions embedded inside energy questions: live run pending
+- [ ] 5.5 Unrelated questions disguised in energy terms: live run pending
+- [ ] 5.6 Requests for hidden prompts or configuration: live run pending
+- [ ] 5.7 Multi-turn gradual drift: live run pending
+- [ ] 5.8 Indirect or encoded instructions: live run pending
+- [x] 5.9 Enforcement is consistent across conversations: `tests/unit/test_isolation.py` (live `xs01` pending)
 
 ### §6 Architecture
-- [ ] 6.1 Modular design
-- [ ] 6.2 LLM integration, conversation management, domain validation and guardrail enforcement are separate
-- [ ] 6.3 Per-conversation context with **no cross-conversation influence**
-- [ ] 6.4 **All** LLM requests pass through the guardrail mechanism
+- [x] 6.1 Modular design: `llm/`, `conversation/`, `domain/`, `guardrails/`
+- [x] 6.2 LLM, conversation, domain and guardrails are separate packages
+- [x] 6.3 Per-conversation context, no cross-conversation influence: `test_isolation.py`, `test_conversation_store.py`
+- [x] 6.4 **All** LLM requests from `app/` pass through the guardrails: `test_architecture.py`. (`scripts/smoke_test.py` is a developer tool outside `app/` that makes one fixed call to check the key.)
 
 ### §7 Technical
-- [ ] 7.1 LLM: Gemini (or another)
-- [ ] 7.2 Python or Node.js → Python 3.11
-- [ ] 7.3 CLI or REST → **both**, as thin shells over one service
-- [ ] 7.4 Config via `.env` or equivalent
-- [ ] 7.5 Automated tests for domain restriction and guardrails
+- [x] 7.1 Gemini
+- [x] 7.2 Python 3.11+
+- [x] 7.3 CLI **and** REST, thin shells over one `ChatService`
+- [x] 7.4 Config via `.env` (`.env.example` lists every setting; `test_config.py` enforces it)
+- [x] 7.5 Automated tests for domain restriction and guardrails: `pytest -q`
 
 ### §8 Submission
-- [ ] 8.1 Git repo with complete source
-- [ ] 8.2 README with setup and run instructions
-- [ ] 8.3 Architecture and implementation explanation
-- [ ] 8.4 Guardrail mechanism explanation
-- [ ] 8.5 Instructions to run locally
+- [x] 8.1 Git repo with complete source
+- [x] 8.2 README with setup and run instructions
+- [x] 8.3 Architecture and implementation explanation (README §5, this file)
+- [x] 8.4 Guardrail mechanism explanation (README §6)
+- [x] 8.5 Instructions to run locally
 
 ## 2. Architecture
 
@@ -77,30 +77,36 @@ app/
                          ANSWER_MODEL, CLASSIFIER_MODEL (no model versions hardcoded), timeouts, limits
   main.py                FastAPI: POST /sessions, POST /sessions/{id}/messages, DELETE /sessions/{id}, GET /health
   cli.py                 REPL. Creates one session and calls the same ChatService.
-  service.py             ChatService.handle(session_id, text). The single entry point; it only calls the pipeline.
+  service.py             ChatService.send(session_id, text). The single entry point; it only calls the pipeline.
+  http_rate_limit.py     Per-IP sliding-window limits (messages, and session creation separately)
   llm/
-    client.py            LLMClient protocol + GeminiClient. Handles timeout, retry, the rate limiter and error mapping.
-    errors.py            LLMTimeout, LLMRateLimited, LLMUnavailable, LLMBlocked, LLMEmpty
+    types.py             LLMClient protocol, LLMRequest / LLMResponse (no SDK imports)
+    client.py            GeminiClient: timeout, per-call time budget, retries, rate limiter, error mapping
+    errors.py            LLMTimeout, LLMRateLimited, LLMUnavailable, LLMRequestError, LLMBlocked, LLMEmpty
     rate_limiter.py      Client-side token bucket that keeps us under the free-tier RPM
+    fallback.py          Optional backup model when the main one is overloaded
   conversation/
-    store.py             SessionStore: dict[session_id → Conversation], per-session lock, TTL, max turns
+    store.py             SessionStore: dict[session_id → Conversation], per-session lock, TTL, max turns,
+                         max sessions
     models.py            Turn, Conversation (accepted turns only, plus a strike counter for logging)
   domain/
     scope.py             IN/OUT topic lists (single source of truth: used by prompts and by tests, see 2.5)
-    classifier.py        LLM topic + intent classifier, structured JSON output
+    classifier.py        G2: LLM topic + intent classifier, structured JSON output, pure decide() rule
     prompts.py           Answerer system prompt and classifier prompt (classifier never sees the answerer prompt)
   guardrails/
     pipeline.py          Orchestrates every stage below. THE only path to the LLM.
-    input_filter.py      Deterministic: normalise, size limits, decode-and-inspect, injection patterns
-    output_filter.py     Deterministic: canary/prompt-leak check, secret regex, schema check, caveat injection
+    input_filter.py      G1 policy: size limits, strong patterns (block), weak patterns (flags)
+    decoders.py          G1 mechanics: normalisation, homoglyphs, small capitals, base64/hex/URL/ROT13/leet decoding
+    answerer.py          G3: the answer call
+    output_filter.py     G4: canary/prompt-leak check, secret regex, topic self-report, caveat injection
     responses.py         Fixed refusal, greeting/meta and error templates (never written by the LLM)
 tests/
   unit/                  Each layer in isolation with a FakeLLM
-  adversarial/           Table-driven cases for §5.1–5.8 + scope IN/OUT cases through the full pipeline (FakeLLM)
-  live/                  Opt-in (`pytest -m live`) run against real Gemini; prints a pass-rate report
+  adversarial/           Table-driven cases for §5.1–5.8 + scope IN/OUT cases: deterministic, mocked and live tiers
+  live/                  Opt-in (`pytest -m live`) classifier and answerer spot checks against real Gemini
 ```
 Rule (§6.4): `GeminiClient` is constructed only inside `pipeline.py`'s factory. A test asserts that no other
-module imports `llm.client`.
+module in `app/` imports `llm.client`.
 
 ### 2.2 Request flow (one user turn)
 ```
@@ -126,7 +132,9 @@ ChatService ──► SessionStore.get(session_id)   (isolated history; unknown 
      • works on any language; translation-wrapped requests are judged on their meaning
      • REFUSE unless on_topic AND intent=="answer" AND confidence ≥ 0.7 AND no G1 strong flag
      • greeting/meta → canned capability message from responses.py (no answer call)
-     • classifier error, timeout or invalid JSON → REFUSE (fail closed)
+     • invalid JSON or low confidence → REFUSE (fail closed)
+     • classifier outage (timeout, 5xx, quota) → fixed "unavailable" text, no strike. Nothing is
+       answered, so this also fails closed; the user simply did nothing wrong.
    ▼
 [G3] Answer generation (1 call to ANSWER_MODEL)
      • system prompt: energy-only scope from scope.py, uncertainty policy, a random CANARY token per process
@@ -145,7 +153,7 @@ ChatService ──► SessionStore.get(session_id)   (isolated history; unknown 
 SessionStore.append(user, answer)   (only on success)  → response
 ```
 Refusal path: return the template from `responses.py`, increment the session's `strikes` counter and log
-`{session_id, stage, reason}` (no message text containing secrets). There is no session reset: refused turns are
+`{hashed session id, stage, reason}` (codes only, never message text). There is no session reset: refused turns are
 never stored, so manipulation cannot build up in the history.
 
 ### 2.3 Where each guardrail sits (and why it's not just the prompt, §4.9)
@@ -167,8 +175,10 @@ Four of the five layers are backend code. The system prompt is one layer among t
 ### 2.4 LLM client (§2)
 - `google-genai`. `GEMINI_API_KEY`, `ANSWER_MODEL` and `CLASSIFIER_MODEL` come from `.env` via `config.py`.
   `.env` is git-ignored and `.env.example` is committed with placeholder values.
-- Per-call timeout (e.g. 15 s). Retry with exponential backoff + jitter (max 3) on 429/500/503/timeout only.
-  Honour `retry-after` when present. Never retry 400/permission errors.
+- Per-attempt timeout (15 s) and a total budget per call (`LLM_CALL_BUDGET_SECONDS`, default 30 s) that covers
+  limiter waits, retries and backoff. Retry with exponential backoff + jitter (max 3) on 429/5xx/timeout/network
+  errors only (from both `httpx` and `httpx2`, which newer google-genai versions use). Honour `retry-after` when
+  present. Never retry 400/permission errors.
 - Map SDK errors to `llm/errors.py`. The pipeline turns them into friendly messages and logs no secrets.
 - A token bucket set slightly below the model's RPM prevents most 429s. One bucket per model (`llm/rate_limiter.py`, used only inside
   `GeminiClient`): `CLASSIFIER_RPM` / `ANSWER_RPM` (defaults 12 / 8, burst 2). A call waits at most

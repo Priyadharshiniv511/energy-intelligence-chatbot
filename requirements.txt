@@ -1,8 +1,11 @@
-fastapi>=0.115
-uvicorn[standard]>=0.30
-google-genai>=1.20
-httpx>=0.27
-pydantic>=2.7
-pydantic-settings>=2.3
-python-dotenv>=1.0
-pytest>=8.0
+# Pinned to the versions the test suite was run against. WHY pinned: google-genai
+# changes behaviour between major versions (e.g. 3.x sends requests through httpx2),
+# so a fresh install must get the same SDK we tested.
+fastapi==0.162.4
+uvicorn[standard]==0.54.0
+google-genai==3.1.0
+httpx==0.28.1
+pydantic==2.14.3
+pydantic-settings==2.16.2
+python-dotenv==1.2.4
+pytest==9.2.0

@@ -246,10 +246,12 @@ def _transformed_views(text: str) -> list[str]:
 
     ROT13 and reversal can't be detected, so we always try them. That is safe because
     only *strong* patterns run on these views, and those essentially never appear by
-    accident in the ROT13 or reverse of a real question.
+    accident in the ROT13 or reverse of a real question. The fully folded view catches
+    words written entirely in Cyrillic/Greek look-alikes without changing what G2 sees.
     """
     return [decoders.despace(text), decoders.unleet(text),
-            decoders.rot13(text), decoders.reverse(text)]
+            decoders.rot13(text), decoders.reverse(text),
+            decoders.fold_all_confusables(text)]
 
 
 def _block(reason: Reason, text: str, flags: set[Flag],

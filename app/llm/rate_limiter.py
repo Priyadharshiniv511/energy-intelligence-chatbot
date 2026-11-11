@@ -41,7 +41,6 @@ class TokenBucket:
     def __init__(self, rpm: float, burst: int, now: float) -> None:
         if rpm <= 0 or burst < 1:
             raise ValueError("rpm must be > 0 and burst >= 1")
-        self.rpm = rpm
         self._rate = rpm / 60.0  # tokens per second
         self._capacity = float(burst)
         self._tokens = float(burst)  # start full: the first calls never wait
