@@ -1,0 +1,14 @@
+# Secrets: never commit the real key
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+*.egg-info/
+
+docs/ass.pdf
