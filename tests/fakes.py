@@ -15,7 +15,7 @@ import httpx
 from google.genai import errors as genai_errors
 from google.genai import types
 
-from app.llm.client import LLMRequest, LLMResponse
+from app.llm.types import LLMRequest, LLMResponse
 from app.llm.errors import LLMError
 
 

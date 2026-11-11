@@ -17,7 +17,7 @@ import random
 import re
 import time
 from dataclasses import dataclass
-from typing import Any, Callable, Literal, Protocol, Sequence
+from typing import Any, Callable
 
 import httpx
 from google import genai
@@ -34,51 +34,16 @@ from app.llm.errors import (
     LLMTimeout,
     LLMUnavailable,
 )
+# The interface lives in app.llm.types (so other modules can use it without importing
+# this file, DESIGN.md 6.4). Re-exported here so existing imports keep working.
+from app.llm.types import ChatMessage, LLMClient, LLMRequest, LLMResponse, Role
+
+__all__ = [
+    "ChatMessage", "GeminiClient", "LLMClient", "LLMRequest", "LLMResponse", "RetryPolicy",
+    "Role", "map_exception", "parse_response",
+]
 
 logger = logging.getLogger(__name__)
-
-Role = Literal["user", "model"]
-
-
-@dataclass(frozen=True)
-class ChatMessage:
-    """One turn of a conversation, in the shape Gemini expects ('user' or 'model')."""
-
-    role: Role
-    text: str
-
-
-@dataclass(frozen=True)
-class LLMRequest:
-    """Everything needed for one model call.
-
-    WHY a request object rather than many arguments: the classifier and the answerer
-    each build one, and a fake client can record and inspect them in tests.
-    """
-
-    model: str
-    system_instruction: str
-    messages: Sequence[ChatMessage]
-    temperature: float = 0.2
-    # If set, Gemini must answer with JSON that matches this JSON Schema.
-    response_schema: dict[str, Any] | None = None
-    max_output_tokens: int | None = None
-
-
-@dataclass(frozen=True)
-class LLMResponse:
-    """The usable text of a reply, plus the reason the model stopped (e.g. 'STOP')."""
-
-    text: str
-    finish_reason: str | None = None
-
-
-class LLMClient(Protocol):
-    """What the rest of the app needs from an LLM. Fakes implement this too."""
-
-    def generate(self, request: LLMRequest) -> LLMResponse:
-        """Return the model's reply, or raise an `LLMError` subclass."""
-        ...
 
 
 @dataclass(frozen=True)

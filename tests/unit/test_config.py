@@ -39,3 +39,9 @@ def test_input_cap_defaults_to_2000_and_rejects_nonsense() -> None:
     assert make().max_input_chars == 2000
     with pytest.raises(ValidationError):
         make(max_input_chars=0)
+
+
+def test_classifier_threshold_defaults_to_0_7_and_must_be_a_probability() -> None:
+    assert make().classifier_confidence_threshold == 0.7
+    with pytest.raises(ValidationError):
+        make(classifier_confidence_threshold=1.5)

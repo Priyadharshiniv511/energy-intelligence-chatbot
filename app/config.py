@@ -48,6 +48,11 @@ class Settings(BaseSettings):
     # give regexes more to chew on. 2,000 chars is plenty for an energy question.
     max_input_chars: int = Field(default=2000, ge=1, le=20000)
 
+    # G2: the classifier's self-reported confidence must reach this for a message to
+    # be answered. WHY configurable: it is tuned against the live suite, and raising it
+    # trades more false refusals for fewer leaks without a code change.
+    classifier_confidence_threshold: float = Field(default=0.7, ge=0.0, le=1.0)
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:
