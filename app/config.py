@@ -44,6 +44,10 @@ class Settings(BaseSettings):
     llm_backoff_base_seconds: float = Field(default=1.0, ge=0)
     llm_backoff_max_seconds: float = Field(default=8.0, ge=0)
 
+    # G1 input cap. WHY: long inputs cost quota, hide injections in bulk text, and
+    # give regexes more to chew on. 2,000 chars is plenty for an energy question.
+    max_input_chars: int = Field(default=2000, ge=1, le=20000)
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

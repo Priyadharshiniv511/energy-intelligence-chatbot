@@ -33,3 +33,9 @@ def test_api_key_is_hidden_when_printed() -> None:
     settings = make(gemini_api_key="AIza-super-secret")
     assert "AIza-super-secret" not in repr(settings)
     assert "AIza-super-secret" not in str(settings.model_dump())
+
+
+def test_input_cap_defaults_to_2000_and_rejects_nonsense() -> None:
+    assert make().max_input_chars == 2000
+    with pytest.raises(ValidationError):
+        make(max_input_chars=0)
