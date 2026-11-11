@@ -26,11 +26,11 @@ def pytest_terminal_summary(terminalreporter: Any, exitstatus: int, config: pyte
         return
     passed = sum(r["expected"] == r["got"] for r in LIVE_RESULTS)
     tr = terminalreporter
-    tr.section("G2 classifier live results")
+    tr.section("Live results")
     tr.write_line("| Case | Expected | Got | Reason |")
     tr.write_line("|---|---|---|---|")
     for r in LIVE_RESULTS:
         mark = "" if r["expected"] == r["got"] else " ✗"
         tr.write_line(f"| {_cell(r['case'])} | {r['expected']} | {r['got']}{mark} | {r['reason']} |")
     tr.write_line("")
-    tr.write_line(f"{passed}/{len(LIVE_RESULTS)} classifications as expected.")
+    tr.write_line(f"{passed}/{len(LIVE_RESULTS)} cases as expected.")
