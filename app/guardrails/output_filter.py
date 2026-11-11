@@ -42,7 +42,9 @@ _NON_ALNUM_RE = re.compile(r"[^a-z0-9]")
 # Settings that are not SecretStr but still reveal implementation details (§4.5).
 # WHY an explicit list: guessing "any long string setting" would also catch harmless
 # values (e.g. "production") and block normal answers that use those words.
-_SENSITIVE_PLAIN_SETTINGS = ("answer_model", "classifier_model")
+_SENSITIVE_PLAIN_SETTINGS = (
+    "answer_model", "classifier_model", "answer_fallback_model", "classifier_fallback_model",
+)
 
 
 class Action(StrEnum):

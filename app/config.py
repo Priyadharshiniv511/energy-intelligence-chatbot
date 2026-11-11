@@ -9,7 +9,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
-from pydantic import Field, SecretStr
+from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -39,6 +39,13 @@ class Settings(BaseSettings):
     answer_model: str = Field(pattern=_MODEL_NAME_PATTERN)
     classifier_model: str = Field(pattern=_MODEL_NAME_PATTERN)
 
+    # Optional backup models, tried when the main model is overloaded (503), rate
+    # limited (429) or times out, after its own retries. WHY: free-tier overloads are
+    # usually per model, so a different model often answers when the main one can't.
+    # Leave unset (or empty) for no fallback.
+    answer_fallback_model: str | None = Field(default=None, pattern=_MODEL_NAME_PATTERN)
+    classifier_fallback_model: str | None = Field(default=None, pattern=_MODEL_NAME_PATTERN)
+
     llm_timeout_seconds: float = Field(default=15.0, gt=0, le=120)
     llm_max_attempts: int = Field(default=3, ge=1, le=10)
     llm_backoff_base_seconds: float = Field(default=1.0, ge=0)
@@ -52,6 +59,18 @@ class Settings(BaseSettings):
     # be answered. WHY configurable: it is tuned against the live suite, and raising it
     # trades more false refusals for fewer leaks without a code change.
     classifier_confidence_threshold: float = Field(default=0.7, ge=0.0, le=1.0)
+
+    # REST API: messages allowed per client IP per minute. WHY: every message can cost
+    # up to two Gemini calls, so one noisy client could burn the whole free-tier quota.
+    api_rate_limit_per_minute: int = Field(default=20, ge=1, le=1000)
+
+    @field_validator("answer_fallback_model", "classifier_fallback_model", mode="before")
+    @classmethod
+    def _empty_means_none(cls, value: object) -> object:
+        """`ANSWER_FALLBACK_MODEL=` (empty) in .env means "no fallback", not a typo."""
+        if isinstance(value, str) and not value.strip():
+            return None
+        return value
 
 
 @lru_cache(maxsize=1)

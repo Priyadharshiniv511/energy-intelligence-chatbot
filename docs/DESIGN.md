@@ -171,6 +171,10 @@ Four of the five layers are backend code. The system prompt is one layer among t
   Honour `retry-after` when present. Never retry 400/permission errors.
 - Map SDK errors to `llm/errors.py`. The pipeline turns them into friendly messages and logs no secrets.
 - A token bucket set slightly below the model's RPM prevents most 429s.
+- Optional fallback models (`ANSWER_FALLBACK_MODEL`, `CLASSIFIER_FALLBACK_MODEL`, `llm/fallback.py`): after the main
+  model's retries fail with 503/5xx, 429 or a timeout, the identical request is sent once to the backup model
+  (with its own retries). 400/403, safety blocks and empty replies never switch models. The backup's reply still
+  goes through G4, and its name is treated as a secret like the main model names.
 
 ### 2.5 Domain scope (encoded in `domain/scope.py`, mirrored in tests)
 **IN:** renewables and solar; efficiency and optimisation; generation, transmission and distribution; grids and smart
@@ -217,3 +221,9 @@ this file), Guardrail mechanism (G1–G4 + table 2.3), Live demo transcript, **K
 - Classifier decisions are probabilistic, and novel jailbreaks may slip past G1/G2 (G3/G4 are the backstop).
 - Free-tier rate limits cap throughput, and sessions are lost on restart (in-memory store).
 - No retrieval/grounding, so answers rely on model knowledge.
+- The session store is in memory, so run a **single uvicorn worker**. Several workers would each hold their own
+  sessions (a session created on one would 404 on another). Scaling out needs a shared store such as Redis.
+- The per-IP rate limit uses the socket's client IP. Behind a reverse proxy every request shares the proxy's IP,
+  so a proxy deployment needs trusted `X-Forwarded-For` handling. The limiter is also per process and in memory.
+- Concurrent messages to the **same** session are not serialised. Each store operation is atomic, but two
+  in-flight turns can both read the same history, and their turns are stored in completion order.
