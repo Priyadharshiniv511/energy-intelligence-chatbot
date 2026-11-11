@@ -170,7 +170,9 @@ Four of the five layers are backend code. The system prompt is one layer among t
 - Per-call timeout (e.g. 15 s). Retry with exponential backoff + jitter (max 3) on 429/500/503/timeout only.
   Honour `retry-after` when present. Never retry 400/permission errors.
 - Map SDK errors to `llm/errors.py`. The pipeline turns them into friendly messages and logs no secrets.
-- A token bucket set slightly below the model's RPM prevents most 429s.
+- A token bucket set slightly below the model's RPM prevents most 429s. One bucket per model (`llm/rate_limiter.py`, used only inside
+  `GeminiClient`): `CLASSIFIER_RPM` / `ANSWER_RPM` (defaults 12 / 8, burst 2). A call waits at most
+  `RATE_LIMIT_MAX_WAIT_SECONDS` (default 5) for a slot; a longer wait raises `LLMRateLimited` → "unavailable", no strike.
 - Optional fallback models (`ANSWER_FALLBACK_MODEL`, `CLASSIFIER_FALLBACK_MODEL`, `llm/fallback.py`): after the main
   model's retries fail with 503/5xx, 429 or a timeout, the identical request is sent once to the backup model
   (with its own retries). 400/403, safety blocks and empty replies never switch models. The backup's reply still

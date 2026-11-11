@@ -34,6 +34,7 @@ from app.llm.errors import (
     LLMTimeout,
     LLMUnavailable,
 )
+from app.llm.rate_limiter import RateLimiter
 # The interface lives in app.llm.types (so other modules can use it without importing
 # this file, DESIGN.md 6.4). Re-exported here so existing imports keep working.
 from app.llm.types import ChatMessage, LLMClient, LLMRequest, LLMResponse, Role
@@ -97,18 +98,22 @@ class GeminiClient:
         retry: RetryPolicy,
         sleep: Callable[[float], None] = time.sleep,
         rng: Callable[[], float] = random.random,
+        rate_limiter: RateLimiter | None = None,
     ) -> None:
         """Wrap an SDK client.
 
         WHY inject `sdk_client`, `sleep` and `rng`: tests pass a fake SDK that raises
         each kind of failure, a `sleep` that only records delays (so tests run
         instantly), and a fixed `rng` (so delays are predictable).
+        `rate_limiter` is None by default, so tests that build a client directly are
+        never slowed down. `from_settings` (the real app) always attaches one.
         """
         self._sdk = sdk_client
         self._timeout_ms = int(timeout_seconds * 1000)  # the SDK takes milliseconds
         self._retry = retry
         self._sleep = sleep
         self._rng = rng
+        self._limiter = rate_limiter
 
     @classmethod
     def from_settings(cls, settings: Settings) -> GeminiClient:
@@ -126,6 +131,7 @@ class GeminiClient:
             sdk,
             timeout_seconds=settings.llm_timeout_seconds,
             retry=RetryPolicy.from_settings(settings),
+            rate_limiter=RateLimiter.from_settings(settings),
         )
 
     def generate(self, request: LLMRequest) -> LLMResponse:
@@ -135,6 +141,11 @@ class GeminiClient:
             types.Content(role=m.role, parts=[types.Part(text=m.text)]) for m in request.messages
         ]
         for attempt in range(1, self._retry.max_attempts + 1):
+            # One token per attempt: each retry is a real request that uses quota.
+            # Outside the `try` on purpose: if our own limiter says "too busy", retrying
+            # here would only wait more, so LLMRateLimited goes straight to the caller.
+            if self._limiter is not None:
+                self._limiter.acquire(request.model)
             try:
                 raw = self._sdk.models.generate_content(
                     model=request.model, contents=contents, config=config

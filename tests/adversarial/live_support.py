@@ -32,8 +32,8 @@ def pace_seconds() -> float:
 class PacedCountingClient:
     """Wraps the real LLMClient: waits between calls and counts calls per model.
 
-    WHY in the test and not in app code: app/llm/rate_limiter.py is the app's job (a
-    later step). This only keeps the live suite from tripping the free-tier RPM limit,
+    WHY on top of app/llm/rate_limiter.py: the app's limiter refuses a call rather than
+    wait more than a few seconds. This pacing keeps the live suite under that limit,
     and the counts let the report show how many calls each case really used.
     """
 

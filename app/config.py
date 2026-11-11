@@ -64,6 +64,15 @@ class Settings(BaseSettings):
     # up to two Gemini calls, so one noisy client could burn the whole free-tier quota.
     api_rate_limit_per_minute: int = Field(default=20, ge=1, le=1000)
 
+    # Client-side Gemini rate limit, per model (app/llm/rate_limiter.py). WHY slightly
+    # below the free tier (~15 RPM for lite models, ~10 for flash): the bucket also allows
+    # a small burst on top, and staying under the limit avoids 429s and wasted retries.
+    classifier_rpm: float = Field(default=12.0, gt=0, le=1000)
+    answer_rpm: float = Field(default=8.0, gt=0, le=1000)
+    # Longest we hold a user's request while waiting for a free slot. If the wait would be
+    # longer, the user gets the "unavailable" message right away instead of a hang.
+    rate_limit_max_wait_seconds: float = Field(default=5.0, ge=0, le=60)
+
     @field_validator("answer_fallback_model", "classifier_fallback_model", mode="before")
     @classmethod
     def _empty_means_none(cls, value: object) -> object:

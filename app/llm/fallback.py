@@ -13,6 +13,10 @@ Which errors don't:
   LLMEmpty. The backup would most likely fail the same way, and for a blocked prompt
   we must not go shopping for a model that will answer it.
 
+The client-side rate limiter lives in the inner GeminiClient, not here, because this
+wrapper makes no real calls itself. If the main model's bucket is empty (LLMRateLimited
+from our own limiter), the backup model is tried once with its own bucket.
+
 This wrapper only changes `request.model`. Prompt, history, schema and temperature are
 identical, and every reply still goes through G4, so guardrails don't change.
 """

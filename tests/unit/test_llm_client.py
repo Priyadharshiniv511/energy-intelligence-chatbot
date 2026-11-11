@@ -263,6 +263,54 @@ def test_from_settings_builds_client_without_network() -> None:
     assert client._retry.max_attempts == 4
 
 
+# ---- Client-side rate limiter -------------------------------------------------------
+
+class RecordingLimiter:
+    """Stands in for RateLimiter: records each acquire, optionally refuses."""
+
+    def __init__(self, refuse: bool = False) -> None:
+        self.refuse = refuse
+        self.models: list[str] = []
+
+    def acquire(self, model: str) -> None:
+        self.models.append(model)
+        if self.refuse:
+            raise LLMRateLimited(status_code=None, retry_after=30.0)
+
+
+def test_limiter_is_asked_once_per_attempt_including_retries() -> None:
+    limiter = RecordingLimiter()
+    sdk = FakeSDK(fakes.api_error(503), fakes.ok_response("ok"))
+    client = GeminiClient(sdk, timeout_seconds=15, retry=RetryPolicy(),
+                          sleep=lambda _: None, rng=lambda: 0.5, rate_limiter=limiter)  # type: ignore[arg-type]
+    client.generate(REQUEST)
+    assert limiter.models == ["test-model", "test-model"]
+
+
+def test_limiter_refusal_skips_the_api_and_is_not_retried() -> None:
+    limiter = RecordingLimiter(refuse=True)
+    sdk = FakeSDK()  # would fail if called: no scripted outcomes
+    sleeps: list[float] = []
+    client = GeminiClient(sdk, timeout_seconds=15, retry=RetryPolicy(),
+                          sleep=sleeps.append, rng=lambda: 0.5, rate_limiter=limiter)  # type: ignore[arg-type]
+    with pytest.raises(LLMRateLimited):
+        client.generate(REQUEST)
+    assert sdk.calls == [] and sleeps == [] and limiter.models == ["test-model"]
+
+
+def test_from_settings_attaches_a_rate_limiter() -> None:
+    settings = Settings(_env_file=None, gemini_api_key="fake-key", answer_model="a",
+                        classifier_model="c", answer_rpm=4)
+    client = GeminiClient.from_settings(settings)
+    assert client._limiter is not None
+    assert client._limiter._limits["a"] == 4
+
+
+def test_directly_built_client_has_no_limiter_so_tests_stay_fast() -> None:
+    client, _ = make_client(FakeSDK())
+    assert client._limiter is None
+
+
 # ---- The interface ------------------------------------------------------------------
 
 def test_fake_llm_client_satisfies_the_interface() -> None:
