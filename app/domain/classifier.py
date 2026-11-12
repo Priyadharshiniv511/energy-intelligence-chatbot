@@ -6,8 +6,8 @@ multi-turn drift. A second model with its own small prompt judges each message. 
 nothing to leak and can't be hijacked by the same text that targets the answerer.
 
 WHY fail closed: the classifier is a gate. If it times out, errors, or replies with
-anything that isn't exactly our schema, we can't know the message is safe, so we refuse
-(CLAUDE.md). A wrong refusal costs a retry; a wrong answer can leak or go off-scope.
+anything that isn't exactly our schema, we can't know the message is safe, so we refuse.
+A wrong refusal costs a retry; a wrong answer can leak or go off-scope.
 
 The decision rule is a pure function (`decide`) so it can be tested exhaustively
 without any model.

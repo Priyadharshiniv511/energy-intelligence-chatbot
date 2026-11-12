@@ -1,6 +1,6 @@
 # Energy Intelligence Chatbot: Design
 
-Source brief: `docs/ass.pdf` (kept out of git). Project rules: `CLAUDE.md`.
+Source brief: `docs/ass.pdf` (kept out of git).
 
 ## 1. Requirements checklist
 
@@ -208,7 +208,7 @@ Each IN and OUT item gets at least one adversarial-suite test case (e.g. "Which 
 | Classifier vs keyword allowlist | keywords only / LLM only / both | **Regex as a fast block, LLM as the decider** | Keywords can't catch disguised questions (§4.6), and an LLM alone wastes quota on obvious attacks. |
 | Latency | — | ~+0.5–1 s per turn for G2 | Acceptable for a chatbot. Obvious attacks short-circuit at G1 with 0 calls. |
 | Free-tier limits | — | Rate limiter + retry/backoff + fail-closed messaging | Free Gemini tiers are roughly 10–15 RPM and a few hundred to ~1,000 requests/day per model (**verify current numbers at ai.google.dev**). 2 calls/turn ≈ 5–7 turns/min. Unit and adversarial tests use a FakeLLM (no quota). The live suite is opt-in. |
-| Uncertain classifier | allow / refuse | **Refuse** (CLAUDE.md rule) | False refusals are cheaper than leaks. Tune the threshold using the live suite. |
+| Uncertain classifier | allow / refuse | **Refuse** (fail-closed rule) | False refusals are cheaper than leaks. Tune the threshold using the live suite. |
 | Session storage | in-memory / Redis / SQLite | **In-memory with TTL** | Sufficient for the assignment and isolated per session id. A store interface allows swapping later. |
 | History sent to answerer | full / last N | **Last 10 accepted turns** | Bounds tokens/cost and limits slow-drift leverage. |
 | Repeated refusals | reset session / count only | **Count and log only** | Refused turns are never stored, so a reset protects nothing. Logging still makes abuse visible. |
