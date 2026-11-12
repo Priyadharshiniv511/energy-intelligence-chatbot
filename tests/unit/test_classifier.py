@@ -101,11 +101,6 @@ def test_disguised_refuses_even_when_marked_on_topic_answer() -> None:
     assert (result.decision, result.reason) == (Decision.REFUSE, Reason.DISGUISED)
 
 
-def test_g1_block_refuses_inside_decide() -> None:
-    verdict = ClassifierVerdict.model_validate_json(verdict_json())
-    assert decide(verdict, threshold=0.7, g1_blocked=True).reason is Reason.G1_BLOCKED
-
-
 # ---- Threshold -------------------------------------------------------------------------
 
 def test_confidence_just_below_threshold_refuses() -> None:

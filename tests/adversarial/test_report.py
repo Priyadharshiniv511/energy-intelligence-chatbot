@@ -63,9 +63,28 @@ def test_report_separates_failures_false_refusals_ambiguous_and_infra() -> None:
 
 
 def test_merge_replaces_same_case_and_keeps_others() -> None:
-    old = {"a": {"id": "a", "v": 1}, "b": {"id": "b", "v": 1}}
-    merged = live_report.merge_results(old, [{"id": "a", "v": 2}])
-    assert merged == {"a": {"id": "a", "v": 2}, "b": {"id": "b", "v": 1}}
+    old_a = _record("a", "disguised", _turn(0, "refuse", "answer"))
+    old_b = _record("b", "disguised", _turn(0, "refuse", "refuse"))
+    new_a = _record("a", "disguised", _turn(0, "refuse", "refuse"))
+    merged = live_report.merge_results({"a": old_a, "b": old_b}, [new_a])
+    assert merged == {"a": new_a, "b": old_b}
+
+
+def test_merge_never_lets_an_infra_rerun_erase_a_scored_result() -> None:
+    passed = _record("a", "act_as_ai", _turn(0, "refuse", "refuse"))
+    failed = _record("b", "act_as_ai", _turn(0, "refuse", "answer"))
+    infra_a = _record("a", "act_as_ai", _turn(0, "refuse", "error"))
+    infra_b = _record("b", "act_as_ai", _turn(0, "refuse", "error"))
+    merged = live_report.merge_results({"a": passed, "b": failed}, [infra_a, infra_b])
+    assert merged == {"a": passed, "b": failed}
+
+
+def test_merge_stores_infra_for_new_cases_and_replaces_older_infra() -> None:
+    old_infra = _record("a", "act_as_ai", _turn(0, "refuse", "error"))
+    new_infra = {**_record("a", "act_as_ai", _turn(0, "refuse", "error")), "run_at": "later"}
+    first_time = _record("c", "act_as_ai", _turn(0, "refuse", "error"))
+    merged = live_report.merge_results({"a": old_infra}, [new_infra, first_time])
+    assert merged == {"a": new_infra, "c": first_time}
 
 
 class _Echo:

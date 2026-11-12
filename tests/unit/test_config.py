@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from app.config import Settings
+from app.config import MAX_INPUT_CHARS_LIMIT, Settings
 
 
 def make(**overrides: object) -> Settings:
@@ -39,8 +39,10 @@ def test_api_key_is_hidden_when_printed() -> None:
 
 def test_input_cap_defaults_to_2000_and_rejects_nonsense() -> None:
     assert make().max_input_chars == 2000
-    with pytest.raises(ValidationError):
-        make(max_input_chars=0)
+    assert make(max_input_chars=MAX_INPUT_CHARS_LIMIT).max_input_chars == MAX_INPUT_CHARS_LIMIT
+    for bad in (0, MAX_INPUT_CHARS_LIMIT + 1):
+        with pytest.raises(ValidationError):
+            make(max_input_chars=bad)
 
 
 def test_classifier_threshold_defaults_to_0_7_and_must_be_a_probability() -> None:

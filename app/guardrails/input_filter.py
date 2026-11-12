@@ -161,7 +161,10 @@ _STRONG_PATTERNS: dict[Reason, list[re.Pattern[str]]] = {
         r"</?\s*system\s*>",
         r"\[/?(?:inst|sys)\]",
         r"<<\s*sys\s*>>",
-        r"#{2,}\s*(?:system|instructions?)\b",
+        # A fake "### SYSTEM:" header. WHY require the colon: "## Instructions for my
+        # inverter" is an ordinary markdown heading. (Newlines are already collapsed
+        # here, so a colon-less header can't be told apart; G2 judges those.)
+        r"#{2,}\s*(?:system|instructions?)\s*:",
         _phrase(r"\bnew (?:system )?instructions?\s*:"),
         _phrase(r"\b(?:system|admin|developer) (?:override|message|notice)\s*:"),
     )],

@@ -72,12 +72,20 @@ def test_g1_block_makes_zero_llm_calls_and_adds_a_strike() -> None:
     assert service.conversation(sid).turns == ()
 
 
-def test_empty_message_is_invalid_input_without_llm_calls() -> None:
+@pytest.mark.parametrize("text", ["   ", "​", "a" * 2001],
+                         ids=["blank", "only-invisible", "too-long"])
+def test_invalid_input_gets_its_own_text_and_no_strike(text: str) -> None:
+    """Empty or over-long input is not an attack, so it must not get the energy-only
+    refusal (wrong message for a long energy question) or count as a strike."""
     service, fake = make_service()
     sid = service.create_session()
-    result = service.send(sid, "   ")
-    assert (result.blocked, result.reason_code) == (True, "invalid_input")
+    result = service.send(sid, text)
+    assert (result.reply, result.blocked, result.reason_code, result.stage) == (
+        responses.invalid_input(2000), False, "invalid_input", "g1")
+    assert "2,000" in result.reply
     assert fake.requests == []
+    assert service.conversation(sid).strikes == 0
+    assert service.conversation(sid).turns == ()
 
 
 def test_g2_refusal_makes_exactly_one_call_and_adds_a_strike() -> None:
@@ -220,6 +228,7 @@ def test_one_log_line_per_turn_with_codes_only(caplog: pytest.LogCaptureFixture)
     line = lines[0]
     assert f"session={_session_tag(sid)}" in line
     assert "stage=g4" in line and "reason=ok" in line and "latency_ms=" in line
+    assert "strikes=-" in line  # no refusal, so no strike total
     everything = "\n".join(r.getMessage() for r in caplog.records)
     for forbidden in (sid, ENERGY_QUESTION, secret_answer, CANARY):
         assert forbidden not in everything
@@ -233,6 +242,18 @@ def test_refusal_log_names_the_internal_reason(caplog: pytest.LogCaptureFixture)
     line = [r.getMessage() for r in caplog.records if r.name == "app.guardrails.pipeline"][0]
     assert "stage=g1" in line and "public=blocked" in line
     assert G1_ATTACK not in line
+
+
+def test_refusal_log_line_carries_the_running_strike_total(
+        caplog: pytest.LogCaptureFixture) -> None:
+    """DESIGN.md 2.2: strikes are counted *and logged*, so repeated attempts are visible."""
+    service, _ = make_service(off_topic_verdict())
+    sid = service.create_session()
+    with caplog.at_level(logging.INFO, logger="app.guardrails.pipeline"):
+        service.send(sid, G1_ATTACK)          # G1 refusal
+        service.send(sid, OFF_TOPIC_QUESTION)  # G2 refusal
+    lines = [r.getMessage() for r in caplog.records if r.name == "app.guardrails.pipeline"]
+    assert "strikes=1" in lines[0] and "strikes=2" in lines[1]
 
 
 def test_process_canary_is_created_once() -> None:

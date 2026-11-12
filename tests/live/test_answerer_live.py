@@ -2,7 +2,8 @@
 
 These calls deliberately skip G1/G2, to check that the answerer prompt and the output
 filter hold on their own if an attack slips through the earlier layers. Needs
-GEMINI_API_KEY, ANSWER_MODEL and CLASSIFIER_MODEL; skips otherwise. About 7 calls.
+GEMINI_API_KEY, ANSWER_MODEL and CLASSIFIER_MODEL; skips otherwise, or while the key is
+still the .env.example placeholder. About 7 calls.
 """
 
 from __future__ import annotations
@@ -10,9 +11,8 @@ from __future__ import annotations
 import time
 
 import pytest
-from pydantic import ValidationError
 
-from app.config import Settings, get_settings
+from app.config import Settings
 from app.guardrails.answerer import ANSWER_RESPONSE_SCHEMA, AnswerPayload, Answerer, new_canary
 from app.guardrails.output_filter import (
     Action,
@@ -22,6 +22,7 @@ from app.guardrails.output_filter import (
     secret_values_from_settings,
 )
 from app.llm.client import ChatMessage, GeminiClient, LLMRequest
+from tests.live_config import live_settings_or_skip
 from tests.live.conftest import record
 
 pytestmark = pytest.mark.live
@@ -32,10 +33,7 @@ CANARY = new_canary()
 
 @pytest.fixture(scope="module")
 def settings() -> Settings:
-    try:
-        return get_settings()
-    except ValidationError:
-        pytest.skip("GEMINI_API_KEY / ANSWER_MODEL / CLASSIFIER_MODEL not configured")
+    return live_settings_or_skip()
 
 
 @pytest.fixture(scope="module")

@@ -9,11 +9,13 @@ Rules this module enforces:
   A test checks that no other app module imports `app.llm.client`.
 - Refusals (G1, G2, G4 block/refuse) add a strike and return a fixed text. The turn is
   never stored, so a manipulation attempt can't build up in the history.
+- Invalid input (empty, or over MAX_INPUT_CHARS) gets its own fixed text and no strike:
+  it says nothing about the topic, so the energy-only refusal would be the wrong answer.
 - Outages and errors (the model unavailable, malformed output, a bug) return a fixed
   text with no strike: the user did nothing wrong. Nothing is answered, so this still
   fails closed.
-- One structured log line per turn, made of codes only: never the message, the reply,
-  the canary or the prompt.
+- One structured log line per turn, made of codes only (plus the session's strike total
+  after a refusal): never the message, the reply, the canary or the prompt.
 """
 
 from __future__ import annotations
@@ -69,9 +71,10 @@ class PipelineResult:
 
 # ---- Internal reason -> public reason code ---------------------------------------------
 
+# G1 reasons that mean "unusable input", not "attack": fixed help text, no strike.
+_G1_INVALID = frozenset({g1.Reason.EMPTY, g1.Reason.TOO_LONG})
+
 _G1_PUBLIC: dict[g1.Reason, str] = {
-    g1.Reason.EMPTY: INVALID_INPUT,
-    g1.Reason.TOO_LONG: INVALID_INPUT,
     g1.Reason.INJECTION: BLOCKED,
     g1.Reason.PROMPT_LEAK: BLOCKED,
     g1.Reason.SECRET_REQUEST: BLOCKED,
@@ -90,8 +93,9 @@ _G2_PUBLIC: dict[g2.Reason, str] = {
     g2.Reason.G1_BLOCKED: BLOCKED,
 }
 
-# G2 refusals that are outages or bugs, not the user's fault: a fixed error text, no
-# strike (the user's choice). The message is still not answered, so this fails closed.
+# G2 refusals that are outages or bugs, not the user's fault: a fixed error text and no
+# strike, because the user did nothing wrong. The message is still not answered, so
+# this fails closed.
 _G2_NO_STRIKE: dict[g2.Reason, tuple[str, str]] = {
     g2.Reason.LLM_ERROR: (UNAVAILABLE, responses.SERVICE_UNAVAILABLE),
     g2.Reason.INTERNAL_ERROR: (ERROR, responses.GENERIC_ERROR),
@@ -157,42 +161,46 @@ class GuardrailPipeline:
         """
         started = self._clock()
         try:
-            result, reason = self._run(session_id, text)
+            result, reason, strikes = self._run(session_id, text)
         except SessionNotFoundError:
             raise
         except Exception as exc:  # noqa: BLE001 - fail closed on anything unexpected
             logger.error("pipeline unexpected error: %s", type(exc).__name__)
             result = PipelineResult(responses.GENERIC_ERROR, False, ERROR, "internal")
-            reason = "internal_error"
-        self._log(session_id, result, reason, started)
+            reason, strikes = "internal_error", None
+        self._log(session_id, result, reason, strikes, started)
         return result
 
     # ---- stages -------------------------------------------------------------------
-    # Each stage returns (result, internal_reason). WHY a return value and not an
-    # attribute: one pipeline serves concurrent requests, so per-turn state must not
-    # live on `self`.
+    # Each stage returns (result, internal_reason, strikes). `strikes` is the session's
+    # new strike total after a refusal, else None; it goes to the log line only.
+    # WHY a return value and not an attribute: one pipeline serves concurrent requests,
+    # so per-turn state must not live on `self`.
 
-    def _run(self, session_id: str, text: str) -> tuple[PipelineResult, str]:
+    def _run(self, session_id: str, text: str) -> tuple[PipelineResult, str, int | None]:
         conversation = self._store.get(session_id)
 
         checked = g1.check_input(text, max_chars=self._max_input_chars)
         if not checked.allowed:
+            if checked.reason in _G1_INVALID:
+                reply = responses.invalid_input(self._max_input_chars)
+                return PipelineResult(reply, False, INVALID_INPUT, "g1"), checked.reason.value, None
             code = _G1_PUBLIC.get(checked.reason, BLOCKED)
-            return self._refuse(session_id, "g1", code), checked.reason.value
+            return self._refuse(session_id, "g1", code, checked.reason.value)
 
         history = [turn.user_text for turn in conversation.turns]
         classification = self._classifier.classify(checked, history)
         reason = classification.reason.value
         if classification.decision is Decision.GREETING:
             # Canned text, no answer call, not stored: nothing to remember.
-            return PipelineResult(responses.GREETING, False, OK, "g2"), reason
+            return PipelineResult(responses.GREETING, False, OK, "g2"), reason, None
         if classification.decision is not Decision.ALLOW:
             if classification.reason in _G2_NO_STRIKE:
                 code, reply = _G2_NO_STRIKE[classification.reason]
-                return PipelineResult(reply, False, code, "g2"), reason
+                return PipelineResult(reply, False, code, "g2"), reason, None
             # Unknown reasons default to BLOCKED: an unmapped refusal must still refuse.
             code = _G2_PUBLIC.get(classification.reason, BLOCKED)
-            return self._refuse(session_id, "g2", code), reason
+            return self._refuse(session_id, "g2", code, reason)
 
         language = classification.verdict.language if classification.verdict else None
         attempt = self._answerer.answer(checked.normalized_text, conversation.turns, language)
@@ -202,31 +210,41 @@ class GuardrailPipeline:
             system_prompt=self._answerer.system_prompt,
             secret_values=self._secret_values,
         )
-        return self._finish(session_id, checked.normalized_text, output), output.reason.value
+        return self._finish(session_id, checked.normalized_text, output)
 
-    def _finish(self, session_id: str, user_text: str, output: g4.OutputResult) -> PipelineResult:
+    def _finish(self, session_id: str, user_text: str,
+                output: g4.OutputResult) -> tuple[PipelineResult, str, int | None]:
         """Act on G4's verdict: store a delivered turn, strike a block or refusal."""
         code = _g4_public(output)
+        reason = output.reason.value
         if output.action is g4.Action.DELIVER:
             # Store the *normalised* text: the history replayed to G2/G3 later must not
             # bring back invisible characters or homoglyphs that G1 removed.
             self._store.append_turn(session_id, user_text, output.text)
-            return PipelineResult(output.text, False, code, "g4")
+            return PipelineResult(output.text, False, code, "g4"), reason, None
         if output.action in (g4.Action.BLOCK, g4.Action.REFUSE):
-            self._store.record_strike(session_id)
-            return PipelineResult(output.text, True, code, "g4")
-        return PipelineResult(output.text, False, code, "g4")  # ERROR: no strike
+            strikes = self._store.record_strike(session_id)
+            return PipelineResult(output.text, True, code, "g4"), reason, strikes
+        return PipelineResult(output.text, False, code, "g4"), reason, None  # ERROR: no strike
 
-    def _refuse(self, session_id: str, stage: str, code: str) -> PipelineResult:
-        self._store.record_strike(session_id)
-        return PipelineResult(responses.REFUSAL, True, code, stage)
+    def _refuse(self, session_id: str, stage: str, code: str,
+                reason: str) -> tuple[PipelineResult, str, int | None]:
+        """Fixed refusal text plus one strike. Returns the new strike total for the log."""
+        strikes = self._store.record_strike(session_id)
+        return PipelineResult(responses.REFUSAL, True, code, stage), reason, strikes
 
-    def _log(self, session_id: str, result: PipelineResult, reason: str, started: float) -> None:
-        """The one log line per turn: codes and timing only."""
+    def _log(self, session_id: str, result: PipelineResult, reason: str,
+             strikes: int | None, started: float) -> None:
+        """The one log line per turn: codes, timing and (after a refusal) the strike total.
+
+        WHY log strikes: refused turns are never stored, so this count is the only place
+        repeated manipulation attempts in one session become visible (DESIGN.md 2.2).
+        """
         latency_ms = int((self._clock() - started) * 1000)
         logger.info(
-            "turn session=%s stage=%s reason=%s public=%s latency_ms=%d",
-            _session_tag(session_id), result.stage, reason, result.reason_code, latency_ms,
+            "turn session=%s stage=%s reason=%s public=%s strikes=%s latency_ms=%d",
+            _session_tag(session_id), result.stage, reason, result.reason_code,
+            "-" if strikes is None else strikes, latency_ms,
         )
 
 

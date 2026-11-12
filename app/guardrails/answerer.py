@@ -22,6 +22,7 @@ from pydantic import BaseModel, ConfigDict, ValidationError
 
 from app.config import Settings
 from app.conversation.models import Turn
+from app.conversation.store import DEFAULT_MAX_TURNS
 from app.domain.prompts import (
     DEFAULT_LANGUAGE_LINE,
     build_answerer_system_prompt,
@@ -33,9 +34,9 @@ from app.llm.types import ChatMessage, LLMClient, LLMRequest
 
 logger = logging.getLogger(__name__)
 
-# WHY 10 (DESIGN.md 3): bounds tokens and cost, and limits how much a slowly drifting
-# conversation can steer the model.
-HISTORY_TURNS = 10
+# WHY the store's limit (10, DESIGN.md 3): bounds tokens and cost, and limits how much
+# a slowly drifting conversation can steer the model. Shared, so the two can't drift.
+HISTORY_TURNS = DEFAULT_MAX_TURNS
 
 # WHY 0.2: low randomness makes invented numbers less likely (§4.7), while keeping
 # answers natural.

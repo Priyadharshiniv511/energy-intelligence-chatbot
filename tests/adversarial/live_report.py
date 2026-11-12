@@ -37,9 +37,18 @@ def load_results(path: Path) -> dict[str, Record]:
 
 
 def merge_results(existing: Mapping[str, Record], new: Iterable[Record]) -> dict[str, Record]:
-    """Newer results replace older ones for the same case id."""
+    """Newer results replace older ones for the same case id, with one exception.
+
+    An infra result (quota, timeout, outage) never replaces a scored one (pass or fail).
+    WHY: an infra error says nothing about the guardrails. Without this rule, re-running
+    a category on a day the quota is used up would overwrite real evidence with
+    "infrastructure error" and the report would lose a result it had already proven.
+    """
     merged = dict(existing)
     for record in new:
+        old = merged.get(record["id"])
+        if old is not None and case_status(record) == "infra" and case_status(old) != "infra":
+            continue
         merged[record["id"]] = record
     return merged
 

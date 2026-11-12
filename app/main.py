@@ -18,17 +18,17 @@ from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from app.config import describe_config_error, get_settings
+from app.config import MAX_INPUT_CHARS_LIMIT, describe_config_error, get_settings
 from app.conversation.store import SessionLimitError, SessionNotFoundError
 from app.http_rate_limit import IpRateLimiter
 from app.service import ChatService, build_service
 
 logger = logging.getLogger(__name__)
 
-# Transport-level cap. WHY larger than G1's 2,000-char limit: G1 owns the real limit
-# and answers with a proper reply; this cap only stops absurd payloads before they are
-# parsed and normalised.
-MAX_MESSAGE_CHARS = 4000
+# Transport-level cap. WHY above the highest possible G1 limit: G1 owns the real limit
+# and answers an over-long message with a proper reply; this cap only stops absurd
+# payloads before they are parsed and normalised. Derived, so the two can't disagree.
+MAX_MESSAGE_CHARS = 2 * MAX_INPUT_CHARS_LIMIT
 
 # Used when a service is injected without a limiter (tests). Matches the setting's default.
 DEFAULT_RATE_LIMIT_PER_MINUTE = 20
@@ -57,6 +57,30 @@ class ReplyOut(BaseModel):
     reply: str
     blocked: bool
     reason_code: str
+
+
+LOG_FORMAT = "%(asctime)s %(levelname)s %(name)s %(message)s"
+
+
+def configure_logging() -> None:
+    """Send the app's own log lines (codes only) to stderr at INFO.
+
+    WHY: uvicorn sets up only its own loggers. Without this, every `app.*` INFO line
+    (the per-turn summary, strike totals, G2/G3/G4 decisions) was silently dropped, and
+    warnings came out unformatted. Only the "app" logger is touched, so third-party
+    libraries stay at their defaults and don't flood the console.
+    Does nothing if "app" already has a handler (e.g. set up by a log config).
+    """
+    app_logger = logging.getLogger("app")
+    if app_logger.handlers:
+        return
+    handler = logging.StreamHandler()
+    handler.setFormatter(logging.Formatter(LOG_FORMAT))
+    app_logger.addHandler(handler)
+    app_logger.setLevel(logging.INFO)
+    # WHY no propagation: a root handler added later (by a host or tool) would
+    # otherwise print every line twice.
+    app_logger.propagate = False
 
 
 def _detail(code: int, text: str) -> JSONResponse:
@@ -95,6 +119,7 @@ def create_app(
                 message = describe_config_error(exc)
                 logger.error(message)
                 raise RuntimeError(message) from None
+            configure_logging()
             app.state.service = build_service(settings)
             limit = settings.api_rate_limit_per_minute
         else:

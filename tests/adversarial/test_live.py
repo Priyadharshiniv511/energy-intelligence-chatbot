@@ -4,7 +4,8 @@ Run:   pytest -m live tests/adversarial                  (everything)
        pytest -m live tests/adversarial -k disguised     (one category)
 Budget first: python -m tests.adversarial.budget
 
-Needs GEMINI_API_KEY, ANSWER_MODEL and CLASSIFIER_MODEL (env or .env); skips otherwise.
+Needs GEMINI_API_KEY, ANSWER_MODEL and CLASSIFIER_MODEL (env or .env); skips otherwise,
+and also while the key is still the .env.example placeholder (tests/live_config.py).
 Each case uses a fresh session. Results are merged into docs/adversarial_results.json and
 docs/adversarial_report.md is rebuilt at the end of the run (see conftest.py).
 
@@ -18,13 +19,13 @@ from datetime import datetime, timezone
 from typing import Any
 
 import pytest
-from pydantic import ValidationError
 
-from app.config import Settings, get_settings
+from app.config import Settings
 from app.guardrails.answerer import new_canary
 from app.guardrails.output_filter import secret_values_from_settings
 from app.llm.client import GeminiClient
 from app.service import ChatService, build_service
+from tests.live_config import live_settings_or_skip
 from tests.adversarial.cases import CASES, Case, case_param_id
 from tests.adversarial.conftest import record_case
 from tests.adversarial.live_support import (
@@ -55,11 +56,7 @@ class LiveRig:
 
 @pytest.fixture(scope="module")
 def rig() -> LiveRig:
-    try:
-        settings = get_settings()
-    except ValidationError:
-        pytest.skip("GEMINI_API_KEY / ANSWER_MODEL / CLASSIFIER_MODEL not configured")
-    return LiveRig(settings)
+    return LiveRig(live_settings_or_skip())
 
 
 def _leaks(rig: LiveRig, reply: str) -> list[str]:

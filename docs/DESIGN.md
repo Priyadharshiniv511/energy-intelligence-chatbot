@@ -46,7 +46,7 @@ stay open until each category has also been run live and recorded in `docs/adver
 - [ ] 5.6 Requests for hidden prompts or configuration: live run pending
 - [ ] 5.7 Multi-turn gradual drift: live run pending
 - [ ] 5.8 Indirect or encoded instructions: live run pending
-- [x] 5.9 Enforcement is consistent across conversations: `tests/unit/test_isolation.py` (live `xs01` pending)
+- [ ] 5.9 Enforcement is consistent across conversations: `tests/unit/test_isolation.py` (mocked); live `xs01` pending
 
 ### §6 Architecture
 - [x] 6.1 Modular design: `llm/`, `conversation/`, `domain/`, `guardrails/`
@@ -118,7 +118,8 @@ ChatService ──► SessionStore.get(session_id)   (isolated history; unknown 
    ▼  guardrails/pipeline.py
 [G1] Input filter (deterministic, 0 LLM calls)
      • NFKC normalise, strip zero-width/bidi chars, collapse homoglyphs
-     • length cap (e.g. 2,000 chars); reject empty input
+     • length cap (MAX_INPUT_CHARS, default 2,000, at most 4,000); reject empty input. Empty or too-long
+       input gets its own fixed "invalid input" text and no strike: it says nothing about the topic
      • detect encoded payloads (base64/hex/rot13/url-encoding). Decode them and run the checks on
        the decoded text too. Any encoded instruction counts as an injection signal.
      • high-precision injection/leak regexes ("ignore (all|previous) instructions",
@@ -153,7 +154,8 @@ ChatService ──► SessionStore.get(session_id)   (isolated history; unknown 
 SessionStore.append(user, answer)   (only on success)  → response
 ```
 Refusal path: return the template from `responses.py`, increment the session's `strikes` counter and log
-`{hashed session id, stage, reason}` (codes only, never message text). There is no session reset: refused turns are
+`{hashed session id, stage, reason, public code, strike total, latency}` (codes only, never message text).
+The API sends `app.*` log lines to the console at INFO (`configure_logging` in `app/main.py`). There is no session reset: refused turns are
 never stored, so manipulation cannot build up in the history.
 
 ### 2.3 Where each guardrail sits (and why it's not just the prompt, §4.9)

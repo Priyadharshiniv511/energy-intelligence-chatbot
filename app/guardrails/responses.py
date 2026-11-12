@@ -31,3 +31,16 @@ GENERIC_ERROR = (
 SERVICE_UNAVAILABLE = (
     "Sorry, the assistant is temporarily unavailable or busy. Please try again in a moment."
 )
+
+# WHY separate from REFUSAL: an empty or too-long message says nothing about its topic.
+# Telling someone with a long energy question "I can only help with energy topics"
+# would be wrong and confusing.
+_INVALID_INPUT_TEMPLATE = (
+    "Sorry, I couldn't process that message. Please send a question between 1 and "
+    "{max_chars:,} characters long."
+)
+
+
+def invalid_input(max_chars: int) -> str:
+    """Fixed text for empty or over-long input. Only our own limit is filled in."""
+    return _INVALID_INPUT_TEMPLATE.format(max_chars=max_chars)

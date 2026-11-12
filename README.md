@@ -78,7 +78,7 @@ python -m app.cli
 
 Type `/reset` to start a new conversation and `/quit` to exit.
 
-Log lines are kept off the chat screen. To write them to a file, set the environment variable `CLI_LOG_FILE=cli.log`. The file holds codes only, never message text. This is the one variable that is not in `.env.example`, because only the CLI reads it, and it reads it from the shell environment.
+Log lines are kept off the chat screen. To write them to a file, set the environment variable `CLI_LOG_FILE=cli.log`. The file holds codes only, never message text. It is not in `.env.example`, because only the CLI reads it, and it reads it from the shell environment. The only other such variable is `ADVERSARIAL_PACE_SECONDS`, used by the live test tier (see [Free-tier quota](#free-tier-quota)).
 
 ## 3. Example usage
 
@@ -125,12 +125,19 @@ The refusal text is fixed (it comes from `app/guardrails/responses.py`), so this
 
 An answered question returns `"blocked": false, "reason_code": "ok"`, with the model's text in `reply`.
 
+An empty message, or one longer than `MAX_INPUT_CHARS` (default 2,000), is not an attack, so it gets its own fixed text, no strike, and never reaches Gemini:
+
+```json
+{"reply": "Sorry, I couldn't process that message. Please send a question between 1 and 2,000 characters long.",
+ "blocked": false, "reason_code": "invalid_input"}
+```
+
 The public `reason_code` values are `ok`, `out_of_scope`, `blocked`, `invalid_input`, `unavailable` and `error`. I kept them coarse on purpose. The internal reason (which check fired) only goes to the logs, so an attacker can't use it to tune the next attempt.
 
 Other status codes:
 
 - 404: unknown, expired or deleted session.
-- 422: malformed body, or a message over 4,000 characters. The input is not echoed back. Messages of 2,001 to 4,000 characters get a normal reply with `invalid_input`.
+- 422: malformed body, or a message over 8,000 characters. The input is not echoed back. A message over `MAX_INPUT_CHARS` but within 8,000 gets a normal 200 reply with `invalid_input` (above). `MAX_INPUT_CHARS` can be at most 4,000, and the 8,000 transport cap is derived from that ceiling, so the two limits can't disagree.
 - 429: one client IP sends more than `API_RATE_LIMIT_PER_MINUTE` messages per minute, or creates more than that many sessions per minute. These are two separate limits.
 - 503: the server already holds its maximum of 10,000 live sessions.
 
@@ -159,11 +166,11 @@ pytest -q
 
 `pyproject.toml` adds `-m 'not live'` by default, so nothing here calls Gemini. A scripted `FakeLLM` (`tests/fakes.py`) stands in for the model. The default suite has unit tests for each module (`tests/unit/`) and the deterministic and mocked adversarial tiers (`tests/adversarial/`).
 
-All default tests pass (`pytest -q`: 688 passed, live tests deselected).
+All default tests pass (`pytest -q`: 701 passed, live tests deselected).
 
 ### Live suites (opt-in, real Gemini, uses quota)
 
-These need a real key in `.env`. Without one they skip themselves.
+These need a real key in `.env`. They skip themselves if the settings are missing or `GEMINI_API_KEY` is still the `.env.example` placeholder, so a placeholder key never writes failed calls into the results file.
 
 ```bash
 python -m tests.adversarial.budget                      # how many calls each category costs (no network)
@@ -182,6 +189,7 @@ Category names for `-k`: `general_knowledge`, `act_as_ai`, `ignore_instructions`
 - The live tier waits 6.5 s between calls (about 9 per minute). Set `ADVERSARIAL_PACE_SECONDS` if your limit is different.
 - After 3 infrastructure errors in a row (quota, timeouts) the run stops early.
 - Each run's results are merged into `docs/adversarial_results.json`, and `docs/adversarial_report.md` is regenerated. Both files are tracked in git, so a live run shows up as changes to commit.
+- A rerun that only hits infrastructure errors (quota, outage) never overwrites an earlier pass or fail for that case. It is only recorded for cases with no scored result yet.
 
 ## 5. Architecture
 
@@ -193,6 +201,7 @@ flowchart TD
     S --> ST0["SessionStore.get<br/>(unknown id: 404)"]
     ST0 --> G1["G1 Input filter<br/>deterministic, 0 LLM calls"]
     G1 -->|strong match| R["Fixed refusal<br/>+ strike, turn not stored"]
+    G1 -->|empty or too long| IV["Fixed invalid-input text<br/>no strike, 0 LLM calls"]
     G1 -->|allowed, with flags| G2["G2 Classifier<br/>1 call to CLASSIFIER_MODEL"]
     G2 -->|off-topic, injection, disguised,<br/>low confidence, invalid output| R
     G2 -->|greeting| GR["Fixed greeting<br/>(no answer call)"]
@@ -205,12 +214,13 @@ flowchart TD
     A --> OUT["Reply to client"]
     R --> OUT
     GR --> OUT
+    IV --> OUT
     E --> OUT
 ```
 
-Refused turns are never stored. This means a manipulation attempt can't build up in the history that later calls see. A refusal only adds one to a per-session `strikes` counter, which is logged.
+Refused turns are never stored. This means a manipulation attempt can't build up in the history that later calls see. A refusal only adds one to a per-session `strikes` counter, and the new total appears in that turn's log line (`strikes=N`; `strikes=-` when nothing was refused). Since refused turns are not stored, this is where repeated attempts become visible.
 
-Each turn writes one summary log line (stage, reason, public code, latency) with a hashed session id. G2, G3 and G4 also log their own decision codes. No log line contains the message, the reply, the prompt or the canary.
+Each turn writes one summary log line (stage, reason, public code, strike total, latency) with a hashed session id. The API sends the `app.*` log lines to the console at INFO (`configure_logging` in `app/main.py`), because uvicorn only sets up its own loggers. G2, G3 and G4 also log their own decision codes. No log line contains the message, the reply, the prompt or the canary.
 
 ### Module layout
 
@@ -260,12 +270,12 @@ tests/live/             Opt-in classifier and answerer checks against real Gemin
 ### G1: input filter (`guardrails/input_filter.py`, `decoders.py`). Deterministic, no LLM call.
 
 - What it catches:
-  - empty or too-long input (`MAX_INPUT_CHARS`, default 2,000);
+  - empty or too-long input (`MAX_INPUT_CHARS`, default 2,000, at most 4,000). This gets its own fixed text and no strike, not the refusal;
   - clear English instruction overrides ("ignore all previous instructions");
   - identity changes ("you are now DAN", "act as ChatGPT");
   - "ignore your energy-only restriction";
   - requests for the system prompt or secrets;
-  - fake chat-template tags (`<|im_start|>`, `[INST]`, `### system`);
+  - fake chat-template tags (`<|im_start|>`, `[INST]`, `### system:`). The markdown-style header needs the colon, so an ordinary heading like "## Instructions for my inverter" passes;
   - the same attacks after decoding from base64, hex, URL-encoding, ROT13, reversed text, leetspeak, letter-spacing and hidden Unicode tag characters.
 - It normalises every message: NFKC, removes zero-width and bidi characters, turns Unicode small capitals into plain letters, folds Cyrillic/Greek look-alikes inside mixed-script words, and collapses whitespace. Later stages and the stored history use this cleaned text. A word written *entirely* in look-alikes ("ѕуѕтем") is also checked in a fully folded copy. This catches it without changing real Russian or Greek text.
 - Weak signals ("pretend", "API key", "system prompt" on its own) never block. They are passed to G2 as flags, because they also show up in genuine questions.
@@ -404,6 +414,7 @@ From `docs/DESIGN.md` §3:
 - G1's look-alike table is a small, high-value subset of Unicode's confusables (Cyrillic, Greek, small capitals). Rarer "fancy font" alphabets rely on G2.
 - The prompt-echo check is English-only. G4 compares English word sequences with the system prompt, so it doesn't catch a *translated* echo of the prompt. The canary and secret checks still apply.
 - G1 patterns are English-only. Non-English attacks rely on G2.
+- G4 checks the reply as plain text. A canary or prompt echo that the model *encodes* (base64, hex, spelled out) would not be caught. G1 decodes such tricks on the way in, but G4 does not decode the way out.
 - Confidence is self-reported by the model and not calibrated. The low-confidence caveat is best-effort and doesn't guarantee factual accuracy.
 - No retrieval or grounding. Answers rely on the model's own knowledge.
 - Free-tier limits cap throughput (about 5 to 7 turns per minute at 2 calls per turn).

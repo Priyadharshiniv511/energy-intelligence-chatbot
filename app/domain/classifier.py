@@ -120,14 +120,12 @@ def _refuse(reason: Reason, verdict: ClassifierVerdict | None = None) -> Classif
     return Classification(Decision.REFUSE, reason, verdict)
 
 
-def decide(verdict: ClassifierVerdict, *, threshold: float, g1_blocked: bool = False) -> Classification:
+def decide(verdict: ClassifierVerdict, *, threshold: float) -> Classification:
     """Turn a model verdict into a decision. Anything not explicitly allowed is refused.
 
     Order matters: hostile intents are checked before confidence, so the logged reason
     names the attack rather than just "low confidence".
     """
-    if g1_blocked:
-        return _refuse(Reason.G1_BLOCKED, verdict)
     if verdict.intent is Intent.GREETING:
         if verdict.confidence >= threshold:
             return Classification(Decision.GREETING, Reason.GREETING, verdict)

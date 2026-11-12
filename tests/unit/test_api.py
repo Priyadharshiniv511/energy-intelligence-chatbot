@@ -254,3 +254,36 @@ def test_bad_config_at_startup_names_settings_only(monkeypatch: pytest.MonkeyPat
     assert "ANSWER_MODEL" in str(info.value)
     assert "secret-value" not in str(info.value)
     assert not isinstance(info.value.__cause__, ValidationError)  # `from None`
+
+
+def test_over_long_message_gets_the_invalid_input_text_not_the_refusal() -> None:
+    """Over G1's limit but under the transport cap: G1 answers, it is not a 422."""
+    service, fake = make_service()
+    with client_for(service) as client:
+        sid = client.post("/sessions").json()["session_id"]
+        response = client.post(f"/sessions/{sid}/messages", json={"message": "a" * 2500})
+    assert response.status_code == 200
+    assert fake.requests == []
+    assert service.conversation(sid).strikes == 0
+    body = response.json()
+    assert body == {"reply": responses.invalid_input(2000), "blocked": False,
+                    "reason_code": "invalid_input"}
+
+
+def test_configure_logging_shows_app_info_lines_once(capsys: pytest.CaptureFixture[str]) -> None:
+    """Under uvicorn nothing configures the "app" logger, so INFO lines were lost."""
+    import logging
+
+    from app.main import configure_logging
+
+    app_logger = logging.getLogger("app")
+    saved = (app_logger.handlers[:], app_logger.level, app_logger.propagate)
+    app_logger.handlers.clear()
+    try:
+        configure_logging()
+        configure_logging()  # idempotent: still one handler, so no duplicate lines
+        assert len(app_logger.handlers) == 1
+        logging.getLogger("app.guardrails.pipeline").info("turn stage=g1 strikes=1")
+        assert capsys.readouterr().err.count("turn stage=g1 strikes=1") == 1
+    finally:
+        app_logger.handlers[:], app_logger.level, app_logger.propagate = saved

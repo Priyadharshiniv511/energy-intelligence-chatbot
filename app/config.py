@@ -17,6 +17,10 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # lowercase letters, digits, dots and dashes, starting with a letter or digit.
 _MODEL_NAME_PATTERN = r"^[a-z0-9][a-z0-9.\-]*$"
 
+# Highest allowed MAX_INPUT_CHARS. WHY a ceiling: the API's transport cap (app/main.py)
+# is derived from it, so a large setting can never be silently cut off at the HTTP layer.
+MAX_INPUT_CHARS_LIMIT = 4000
+
 
 class Settings(BaseSettings):
     """All runtime configuration.
@@ -58,7 +62,7 @@ class Settings(BaseSettings):
 
     # G1 input cap. WHY: long inputs cost quota, hide injections in bulk text, and
     # give regexes more to chew on. 2,000 chars is plenty for an energy question.
-    max_input_chars: int = Field(default=2000, ge=1, le=20000)
+    max_input_chars: int = Field(default=2000, ge=1, le=MAX_INPUT_CHARS_LIMIT)
 
     # G2: the classifier's self-reported confidence must reach this for a message to
     # be answered. WHY configurable: it is tuned against the live suite, and raising it

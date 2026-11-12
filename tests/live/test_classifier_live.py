@@ -1,7 +1,8 @@
 """Opt-in live test of the G2 classifier against real Gemini: `pytest -m live`.
 
 Each message goes through G1 first, like the real flow. Needs GEMINI_API_KEY,
-ANSWER_MODEL and CLASSIFIER_MODEL in the environment or .env; skips otherwise.
+ANSWER_MODEL and CLASSIFIER_MODEL in the environment or .env; skips otherwise, or while
+the key is still the .env.example placeholder.
 Uses about 16 classifier calls, paced to stay under free-tier per-minute limits.
 
 Tests are allowed to build GeminiClient directly; the "pipeline only" rule
@@ -13,9 +14,8 @@ from __future__ import annotations
 import time
 
 import pytest
-from pydantic import ValidationError
 
-from app.config import Settings, get_settings
+from app.config import Settings
 from app.domain.classifier import (
     CLASSIFIER_RESPONSE_SCHEMA,
     Classification,
@@ -27,6 +27,7 @@ from app.domain.classifier import (
 from app.domain.prompts import CLASSIFIER_SYSTEM_PROMPT
 from app.guardrails.input_filter import check_input
 from app.llm.client import ChatMessage, GeminiClient, LLMRequest
+from tests.live_config import live_settings_or_skip
 from tests.live.conftest import record
 
 pytestmark = pytest.mark.live
@@ -37,10 +38,7 @@ PACE_SECONDS = 6.5
 
 @pytest.fixture(scope="module")
 def settings() -> Settings:
-    try:
-        return get_settings()
-    except ValidationError:
-        pytest.skip("GEMINI_API_KEY / ANSWER_MODEL / CLASSIFIER_MODEL not configured")
+    return live_settings_or_skip()
 
 
 @pytest.fixture(scope="module")
